@@ -2,9 +2,11 @@
 
 Thank you for your interest in contributing to SPRX. This document describes how to set up the project, the standards contributions are held to, and the review process for changes across the monorepo.
 
+**Contents:** [Project Overview](#project-overview) · [Before You Contribute](#before-you-contribute) · [Development Setup](#development-setup) · [Branching](#branching-strategy) · [Commits](#commit-convention) · [PR Rules](#pull-request-rules) · [Code Review](#code-review) · [Security](#security-contributions) · [Testing](#testing-requirements) · [Documentation](#documentation) · [Style Rules](#style-rules) · [Checklist](#contributor-checklist) · [License](#license-agreement)
+
 ## Project Overview
 
-SPRX (**S**calable **P**rotocol for **R**eal-world **X**), also referred to as **Sprax Chain**, is a Layer-1 blockchain protocol. Its native asset is **SPRX**, a freely floating cryptocurrency with 18-decimal precision (see [docs/TOKENOMICS.md](docs/TOKENOMICS.md)).
+SPRX (**S**calable **P**rotocol for **R**eal-world **X**), also referred to as **Sprax Chain**, is a Layer-1 blockchain protocol. Its native asset is **SPRX**, a freely floating cryptocurrency with 18-decimal precision (see [docs/TOKENOMICS.md](docs/TOKENOMICS.md)). Start with [README.md](README.md) for the full architecture diagram and component map before working through this document.
 
 This repository is a monorepo containing:
 
@@ -16,6 +18,20 @@ This repository is a monorepo containing:
 - **Indexer** — the `sprax-indexer` crate and [backend/scripts/start_indexer.py](backend/scripts/start_indexer.py).
 - **Smart contracts** — the `sprax-wasm` contract execution engine (see [docs/SMART_CONTRACTS.md](docs/SMART_CONTRACTS.md) and [docs/CONTRACT_SECURITY.md](docs/CONTRACT_SECURITY.md)).
 - **Infrastructure** — [docker/](docker/), [deploy/](deploy/) (devnet/testnet/mainnet Docker Compose stacks, genesis files, nginx, Prometheus), and [scripts/](scripts/).
+
+### Component Setup at a Glance
+
+| Component | Path | Toolchain | Verify locally |
+|---|---|---|---|
+| Rust chain workspace | [crates/](crates/) | Rust ≥ 1.80.0 | `cargo test --workspace --all-targets` |
+| Backend API | [backend/](backend/) | Python ≥ 3.11 | `pytest` |
+| Mobile wallet | [apps/mobile-wallet/](apps/mobile-wallet/) | Flutter ≥ 3.10 / Dart ≥ 3.0 | `flutter test` |
+| Explorer UI | [apps/explorer-ui/](apps/explorer-ui/) | Node 18+ / Vite / Vitest | `npm run build && npm run test` |
+| Admin panel | [apps/admin-panel/](apps/admin-panel/) | Node 18+ / Vite / Vitest | `npm run build && npm run test` |
+| Wallet SDK | [packages/sprax-wallet-core/](packages/sprax-wallet-core/) | Node 18+ / Jest | `npm run build && npm test` |
+| Web wallet | [apps/web-wallet/](apps/web-wallet/) | Node 18+ / Vite | `npm run build` (no test runner yet) |
+
+Full details, including lint/typecheck commands, are in [Development Setup](#development-setup) below.
 
 ## Before You Contribute
 
@@ -126,7 +142,18 @@ chore(ci): bump rust-toolchain pin
 - No generated/build artifacts (`target/`, `build/`, `node_modules/`, `.dart_tool/`) — check `.gitignore` coverage before committing.
 - Update documentation when behavior changes (see [Documentation](#documentation)).
 - Resolve all critical warnings before requesting review — CI runs Rust checks with `-D warnings` and Clippy with `-D warnings`, so warnings fail the build outright.
-- Your branch must pass the relevant CI jobs (`check`, `test`, `fmt`, `clippy`, `backend-test`, `frontend-build`, `docker-build`, `security`) before merge.
+- Your branch must pass the relevant CI jobs before merge (see [.github/workflows/ci.yml](.github/workflows/ci.yml)):
+
+| Job | Checks |
+|---|---|
+| `check` | `cargo check --all-targets --all-features` |
+| `test` | `cargo test --all-targets --all-features` |
+| `fmt` | `cargo fmt --all -- --check` |
+| `clippy` | `cargo clippy --all-targets --all-features -- -D warnings` |
+| `backend-test` | `pytest` against the FastAPI backend |
+| `frontend-build` | Builds wallet SDK, web wallet, explorer UI, admin panel |
+| `docker-build` | Builds the node and backend Docker images |
+| `security` | TruffleHog verified-secret scan across the diff |
 
 ## Code Review
 
