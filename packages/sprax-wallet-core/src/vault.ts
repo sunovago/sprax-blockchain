@@ -74,15 +74,15 @@ export class WalletVault {
     if (typeof crypto !== "undefined" && crypto.subtle) {
       const cryptoKey = await crypto.subtle.importKey(
         "raw",
-        derivedKey,
+        derivedKey as BufferSource,
         { name: "AES-GCM" },
         false,
         ["encrypt"]
       );
       const encryptedBuffer = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv },
+        { name: "AES-GCM", iv: iv as unknown as BufferSource },
         cryptoKey,
-        plaintext
+        plaintext as unknown as BufferSource
       );
       cipherBytes = new Uint8Array(encryptedBuffer);
     } else {
@@ -124,15 +124,15 @@ export class WalletVault {
       try {
         const cryptoKey = await crypto.subtle.importKey(
           "raw",
-          derivedKey,
+          derivedKey as BufferSource,
           { name: "AES-GCM" },
           false,
           ["decrypt"]
         );
         const decryptedBuffer = await crypto.subtle.decrypt(
-          { name: "AES-GCM", iv },
+          { name: "AES-GCM", iv: iv as unknown as BufferSource },
           cryptoKey,
-          cipherBytes
+          cipherBytes as unknown as BufferSource
         );
         decryptedBytes = new Uint8Array(decryptedBuffer);
       } catch {

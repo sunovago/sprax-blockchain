@@ -49,6 +49,10 @@ packages = ["src/sprax_backend"]
 line-length = 100
 target-version = "py311"
 
+[tool.hatch.build.targets.wheel]
+packages = ["app"]
+
+
 [tool.mypy]
 python_version = "3.11"
 strict = false
