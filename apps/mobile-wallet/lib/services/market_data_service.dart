@@ -2,8 +2,10 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/material.dart';
 import '../core/models/market_models.dart';
+import 'binance_market_service.dart';
 
 class MarketDataService extends ChangeNotifier {
+  final BinanceMarketService _binanceApi;
   final Map<String, MarketAsset> _assetsMap = {};
   final Map<String, Map<ChartTimeframe, List<Candle>>> _candleCache = {};
 
@@ -40,8 +42,13 @@ class MarketDataService extends ChangeNotifier {
 
   double get sprxUsdPrice => _assetsMap['sprx']?.currentPriceUsd ?? 1.25;
 
-  MarketDataService({bool startPeriodicUpdates = true}) {
+  MarketDataService({
+    BinanceMarketService? binanceApi,
+    bool startPeriodicUpdates = true,
+  }) : _binanceApi = binanceApi ?? BinanceMarketService() {
     _initializeDefaultAssets();
+    // Initial async fetch of real live market data
+    refreshMarketData();
     if (startPeriodicUpdates) {
       _startLiveTickerUpdates();
     }
@@ -247,22 +254,74 @@ class MarketDataService extends ChangeNotifier {
   }
 
   void _startLiveTickerUpdates() {
-    _liveTickerTimer = Timer.periodic(const Duration(seconds: 4), (_) {
-      _simulateLiveTick();
+    _liveTickerTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _fetchRealTickers();
     });
   }
 
-  void _simulateLiveTick() {
+  Future<void> _fetchRealTickers() async {
+    final liveData = await _binanceApi.fetch24hrTickers();
+    if (liveData.isNotEmpty) {
+      for (final entry in BinanceMarketService.assetToPairMap.entries) {
+        final assetId = entry.key;
+        final pair = entry.value;
+        final stats = liveData[pair];
+
+        if (stats != null && _assetsMap.containsKey(assetId)) {
+          final existing = _assetsMap[assetId]!;
+          final price = stats['lastPrice'] as double;
+          final change = stats['priceChange'] as double;
+          final pct = stats['priceChangePercent'] as double;
+          final high = stats['highPrice'] as double;
+          final low = stats['lowPrice'] as double;
+          final vol = stats['quoteVolume'] as double;
+
+          final updatedSparkline = List<double>.from(existing.sparkline);
+          if (updatedSparkline.length > 20) updatedSparkline.removeAt(0);
+          updatedSparkline.add(price);
+
+          _assetsMap[assetId] = existing.copyWith(
+            currentPriceUsd: price > 0 ? price : existing.currentPriceUsd,
+            priceChange24h: change,
+            priceChangePercentage24h: pct,
+            high24h: high > 0 ? high : existing.high24h,
+            low24h: low > 0 ? low : existing.low24h,
+            volume24h: vol > 0 ? vol : existing.volume24h,
+            sparkline: updatedSparkline,
+          );
+        }
+      }
+
+      // Derive SPRX native ecosystem assets tied to BTC/ETH market ratio
+      final btcAsset = _assetsMap['btc'];
+      if (btcAsset != null) {
+        final btcFactor = btcAsset.currentPriceUsd / 68000.0;
+        final sprx = _assetsMap['sprx'];
+        if (sprx != null) {
+          final sprxPrice = 1.25 * btcFactor;
+          _assetsMap['sprx'] = sprx.copyWith(
+            currentPriceUsd: sprxPrice,
+            priceChangePercentage24h: btcAsset.priceChangePercentage24h + 1.2,
+          );
+        }
+      }
+      _isLive = true;
+      notifyListeners();
+    } else {
+      // Offline fallback: smooth small fluctuation
+      _simulateLocalTick();
+    }
+  }
+
+  void _simulateLocalTick() {
     final assetKeys = _assetsMap.keys.toList();
     if (assetKeys.isEmpty) return;
 
-    // Pick 2-3 random assets to simulate live market price updates
-    for (int i = 0; i < 3; i++) {
+    for (int i = 0; i < 2; i++) {
       final key = assetKeys[_random.nextInt(assetKeys.length)];
       final asset = _assetsMap[key]!;
 
-      // Fluctuate price by -0.3% to +0.3%
-      final deltaFactor = 1.0 + ((_random.nextDouble() - 0.48) * 0.006);
+      final deltaFactor = 1.0 + ((_random.nextDouble() - 0.49) * 0.002);
       final newPrice = asset.currentPriceUsd * deltaFactor;
       final new24hChange = asset.priceChange24h + (newPrice - asset.currentPriceUsd);
       final newPct = (new24hChange / (newPrice - new24hChange)) * 100;
@@ -299,8 +358,7 @@ class MarketDataService extends ChangeNotifier {
     _errorMessage = null;
     notifyListeners();
 
-    await Future.delayed(const Duration(milliseconds: 600));
-    _isLive = true;
+    await _fetchRealTickers();
     _isLoading = false;
     notifyListeners();
   }
@@ -311,6 +369,17 @@ class MarketDataService extends ChangeNotifier {
 
     if (_candleCache[key]![timeframe] != null) {
       return _candleCache[key]![timeframe]!;
+    }
+
+    // Trigger async background live candle query
+    final binancePair = BinanceMarketService.assetToPairMap[key];
+    if (binancePair != null) {
+      _binanceApi.fetchKlines(symbol: binancePair, timeframe: timeframe).then((liveCandles) {
+        if (liveCandles.isNotEmpty) {
+          _candleCache[key]![timeframe] = liveCandles;
+          notifyListeners();
+        }
+      });
     }
 
     final asset = _assetsMap[key] ?? _assetsMap['sprx']!;
@@ -375,6 +444,7 @@ class MarketDataService extends ChangeNotifier {
   }
 
   OrderBookData getOrderBook(String symbol) {
+    // Attempt to return realistic orderbook around current asset mark price
     final asset = getAssetBySymbol(symbol.split('/')[0]) ?? _assetsMap['sprx']!;
     final midPrice = asset.currentPriceUsd;
 
@@ -385,12 +455,12 @@ class MarketDataService extends ChangeNotifier {
     double askTotal = 0;
 
     for (int i = 1; i <= 8; i++) {
-      final bidPrice = midPrice * (1 - (i * 0.0015));
+      final bidPrice = midPrice * (1 - (i * 0.0012));
       final bidAmount = (_random.nextDouble() * 1500) + 200;
       bidTotal += bidAmount;
       bids.add(OrderBookEntry(price: bidPrice, amount: bidAmount, total: bidTotal));
 
-      final askPrice = midPrice * (1 + (i * 0.0015));
+      final askPrice = midPrice * (1 + (i * 0.0012));
       final askAmount = (_random.nextDouble() * 1500) + 200;
       askTotal += askAmount;
       asks.add(OrderBookEntry(price: askPrice, amount: askAmount, total: askTotal));
@@ -416,14 +486,14 @@ class MarketDataService extends ChangeNotifier {
 
     for (int i = 0; i < 12; i++) {
       final isBuy = _random.nextBool();
-      final p = midPrice * (1 + ((_random.nextDouble() - 0.5) * 0.004));
+      final p = midPrice * (1 + ((_random.nextDouble() - 0.5) * 0.003));
       final amt = (_random.nextDouble() * 800) + 50;
       trades.add(MarketTradeItem(
         id: 't_$i',
         price: p,
         amount: amt,
         isBuy: isBuy,
-        timestamp: now.subtract(Duration(seconds: i * 3 + _random.nextInt(3))),
+        timestamp: now.subtract(Duration(seconds: i * 2 + _random.nextInt(2))),
       ));
     }
     return trades;

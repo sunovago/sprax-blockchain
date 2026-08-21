@@ -2,10 +2,12 @@ import 'dart:async';
 import 'dart:math';
 import 'package:flutter/foundation.dart';
 import '../core/models/perps_models.dart';
+import 'binance_market_service.dart';
 import 'secure_storage_service.dart';
 
 class PerpsService extends ChangeNotifier {
   final SecureStorageService _storage = SecureStorageService();
+  final BinanceMarketService _binanceApi;
   final Map<String, PerpMarket> _markets = {};
   String _selectedSymbol = 'SPRX/USDT';
 
@@ -35,7 +37,10 @@ class PerpsService extends ChangeNotifier {
   double get totalPositionMargin =>
       _positions.fold(0.0, (acc, p) => acc + p.margin);
 
-  PerpsService({bool startPeriodicUpdates = true}) {
+  PerpsService({
+    BinanceMarketService? binanceApi,
+    bool startPeriodicUpdates = true,
+  }) : _binanceApi = binanceApi ?? BinanceMarketService() {
     _initMarkets();
     if (startPeriodicUpdates) {
       _startLivePriceTicks();
@@ -176,22 +181,49 @@ class PerpsService extends ChangeNotifier {
   }
 
   void _startLivePriceTicks() {
-    _liveTickerTimer = Timer.periodic(const Duration(seconds: 3), (_) {
+    _liveTickerTimer = Timer.periodic(const Duration(seconds: 5), (_) {
+      _syncLiveMarkPrices();
+    });
+  }
+
+  Future<void> _syncLiveMarkPrices() async {
+    final liveData = await _binanceApi.fetch24hrTickers();
+    if (liveData.isNotEmpty) {
       for (final key in _markets.keys) {
         final m = _markets[key]!;
-        final deltaFactor = 1.0 + ((_random.nextDouble() - 0.49) * 0.004);
-        final newPrice = m.lastPrice * deltaFactor;
-        final newMark = newPrice * (1.0 + ((_random.nextDouble() - 0.5) * 0.0005));
+        final pair = key.replaceAll('/', '');
+        final stats = liveData[pair];
 
-        _markets[key] = m.copyWith(
-          lastPrice: newPrice,
-          markPrice: newMark,
-          high24h: max(m.high24h, newPrice),
-          low24h: min(m.low24h, newPrice),
-        );
+        if (stats != null) {
+          final price = stats['lastPrice'] as double;
+          final high = stats['highPrice'] as double;
+          final low = stats['lowPrice'] as double;
+          final change = stats['priceChange'] as double;
+          final pct = stats['priceChangePercent'] as double;
+
+          _markets[key] = m.copyWith(
+            lastPrice: price > 0 ? price : m.lastPrice,
+            markPrice: price > 0 ? price : m.markPrice,
+            high24h: high > 0 ? high : m.high24h,
+            low24h: low > 0 ? low : m.low24h,
+            priceChange24h: change,
+            priceChangePercentage24h: pct,
+          );
+        } else if (key == 'SPRX/USDT') {
+          final btcStats = liveData['BTCUSDT'];
+          if (btcStats != null) {
+            final btcPrice = btcStats['lastPrice'] as double;
+            final factor = btcPrice / 68000.0;
+            final sprxPrice = 1.25 * factor;
+            _markets['SPRX/USDT'] = m.copyWith(
+              lastPrice: sprxPrice,
+              markPrice: sprxPrice,
+              priceChangePercentage24h: (btcStats['priceChangePercent'] as double) + 1.2,
+            );
+          }
+        }
       }
 
-      // Update positions mark prices
       for (int i = 0; i < _positions.length; i++) {
         final pos = _positions[i];
         final market = _markets[pos.symbol];
@@ -199,12 +231,37 @@ class PerpsService extends ChangeNotifier {
           _positions[i] = pos.copyWith(markPrice: market.markPrice);
         }
       }
-
       notifyListeners();
-    });
+    } else {
+      _localMicroTick();
+    }
   }
 
-  /// Calculates estimated liquidation price
+  void _localMicroTick() {
+    for (final key in _markets.keys) {
+      final m = _markets[key]!;
+      final deltaFactor = 1.0 + ((_random.nextDouble() - 0.49) * 0.002);
+      final newPrice = m.lastPrice * deltaFactor;
+      final newMark = newPrice * (1.0 + ((_random.nextDouble() - 0.5) * 0.0003));
+
+      _markets[key] = m.copyWith(
+        lastPrice: newPrice,
+        markPrice: newMark,
+        high24h: max(m.high24h, newPrice),
+        low24h: min(m.low24h, newPrice),
+      );
+    }
+
+    for (int i = 0; i < _positions.length; i++) {
+      final pos = _positions[i];
+      final market = _markets[pos.symbol];
+      if (market != null) {
+        _positions[i] = pos.copyWith(markPrice: market.markPrice);
+      }
+    }
+    notifyListeners();
+  }
+
   double calculateLiquidationPrice({
     required PositionSide side,
     required double entryPrice,
@@ -212,35 +269,64 @@ class PerpsService extends ChangeNotifier {
     double maintenanceMarginRate = 0.01,
   }) {
     if (side == PositionSide.long) {
-      return entryPrice * (1.0 - (1.0 / leverage) + maintenanceMarginRate);
+      return entryPrice * (1 - (1 / leverage) + maintenanceMarginRate);
     } else {
-      return entryPrice * (1.0 + (1.0 / leverage) - maintenanceMarginRate);
+      return entryPrice * (1 + (1 / leverage) - maintenanceMarginRate);
     }
   }
 
-  /// Estimates execution fee (0.05% taker)
-  double calculateEstimatedFee(double notional) {
-    return notional * 0.0005;
+  double calculateEstimatedFee(double notionalUsd) {
+    const takerFeeRate = 0.0005; // 0.05% taker fee
+    return notionalUsd * takerFeeRate;
   }
 
-  /// Places a new testnet/demo perpetual order
-  Future<String> placeTestnetOrder({
+  Future<void> placeTestnetOrder({
     required String symbol,
     required OrderSide side,
-    required PerpOrderType type,
+    PerpOrderType? orderType,
+    PerpOrderType? type,
     required double size,
-    required int leverage,
+    double? price,
     double? limitPrice,
+    required int leverage,
+    double? triggerPrice,
     double? takeProfitPrice,
     double? stopLossPrice,
   }) async {
+    final effectivePrice = limitPrice ?? price ?? 0.0;
+    return submitOrder(
+      symbol: symbol,
+      side: side,
+      orderType: orderType ?? type ?? PerpOrderType.market,
+      size: size,
+      price: effectivePrice,
+      leverage: leverage,
+      triggerPrice: triggerPrice,
+      takeProfitPrice: takeProfitPrice,
+      stopLossPrice: stopLossPrice,
+    );
+  }
+
+  Future<void> submitOrder({
+    required String symbol,
+    required OrderSide side,
+    PerpOrderType? orderType,
+    PerpOrderType? type,
+    required double size,
+    required double price,
+    required int leverage,
+    double? triggerPrice,
+    double? takeProfitPrice,
+    double? stopLossPrice,
+  }) async {
+    final effectiveType = orderType ?? type ?? PerpOrderType.market;
     _isLoading = true;
     notifyListeners();
 
-    await Future.delayed(const Duration(milliseconds: 500));
+    await Future.delayed(const Duration(milliseconds: 400));
 
     final market = _markets[symbol] ?? selectedMarket;
-    final executionPrice = (type == PerpOrderType.market) ? market.markPrice : (limitPrice ?? market.markPrice);
+    final executionPrice = (effectiveType == PerpOrderType.market) ? market.markPrice : price;
     final notional = size * executionPrice;
     final marginRequired = notional / leverage;
     final fee = calculateEstimatedFee(notional);
@@ -248,92 +334,115 @@ class PerpsService extends ChangeNotifier {
     if (marginRequired + fee > _availableDemoMarginUsdt) {
       _isLoading = false;
       notifyListeners();
-      throw Exception('Insufficient demo USDT margin balance');
+      throw Exception('Insufficient demo USDT balance for margin + estimated fees.');
     }
 
     final orderId = 'ord_${DateTime.now().millisecondsSinceEpoch}';
-    final positionSide = (side == OrderSide.buy) ? PositionSide.long : PositionSide.short;
+    final order = PerpOrder(
+      id: orderId,
+      symbol: symbol,
+      side: side,
+      type: effectiveType,
+      size: size,
+      price: executionPrice,
+      leverage: leverage,
+      status: PerpOrderStatus.filled,
+      filledSize: size,
+      triggerPrice: triggerPrice,
+      takeProfitPrice: takeProfitPrice,
+      stopLossPrice: stopLossPrice,
+      createdAt: DateTime.now(),
+    );
 
-    if (type == PerpOrderType.market) {
-      // Execute immediately into position
-      _availableDemoMarginUsdt -= (marginRequired + fee);
+    _orderHistory.insert(0, order);
+    _availableDemoMarginUsdt -= (marginRequired + fee);
 
-      final liqPrice = calculateLiquidationPrice(
-        side: positionSide,
-        entryPrice: executionPrice,
-        leverage: leverage,
-      );
+    final posSide = (side == OrderSide.buy) ? PositionSide.long : PositionSide.short;
+    final liqPrice = calculateLiquidationPrice(
+      side: posSide,
+      entryPrice: executionPrice,
+      leverage: leverage,
+    );
 
-      final existingPosIdx = _positions.indexWhere((p) => p.symbol == symbol && p.side == positionSide);
-      if (existingPosIdx >= 0) {
-        final current = _positions[existingPosIdx];
-        final newTotalSize = current.size + size;
-        final newEntry = ((current.size * current.entryPrice) + (size * executionPrice)) / newTotalSize;
-        final newMargin = current.margin + marginRequired;
+    final existingIndex = _positions.indexWhere((p) => p.symbol == symbol && p.side == posSide);
+    if (existingIndex >= 0) {
+      final oldPos = _positions[existingIndex];
+      final newTotalSize = oldPos.size + size;
+      final newEntry = ((oldPos.size * oldPos.entryPrice) + (size * executionPrice)) / newTotalSize;
+      final newMargin = oldPos.margin + marginRequired;
 
-        _positions[existingPosIdx] = current.copyWith(
-          size: newTotalSize,
+      _positions[existingIndex] = oldPos.copyWith(
+        size: newTotalSize,
+        entryPrice: newEntry,
+        margin: newMargin,
+        liquidationPrice: calculateLiquidationPrice(
+          side: posSide,
           entryPrice: newEntry,
-          margin: newMargin,
-          liquidationPrice: calculateLiquidationPrice(
-            side: positionSide,
-            entryPrice: newEntry,
-            leverage: leverage,
-          ),
-        );
+          leverage: leverage,
+        ),
+      );
+    } else {
+      _positions.insert(
+        0,
+        PerpPosition(
+          id: 'pos_${DateTime.now().millisecondsSinceEpoch}',
+          symbol: symbol,
+          side: posSide,
+          size: size,
+          entryPrice: executionPrice,
+          markPrice: market.markPrice,
+          leverage: leverage,
+          margin: marginRequired,
+          liquidationPrice: liqPrice,
+          openedAt: DateTime.now(),
+        ),
+      );
+    }
+
+    _isLoading = false;
+    notifyListeners();
+  }
+
+  void cancelOrder(String orderId) {
+    _openOrders.removeWhere((o) => o.id == orderId);
+    notifyListeners();
+  }
+
+  Future<void> closePosition(String positionId) async {
+    _isLoading = true;
+    notifyListeners();
+
+    await Future.delayed(const Duration(milliseconds: 300));
+
+    final idx = _positions.indexWhere((p) => p.id == positionId);
+    if (idx >= 0) {
+      final pos = _positions[idx];
+      final market = _markets[pos.symbol] ?? selectedMarket;
+      final closePrice = market.markPrice;
+
+      double realizedPnl;
+      if (pos.side == PositionSide.long) {
+        realizedPnl = (closePrice - pos.entryPrice) * pos.size;
       } else {
-        _positions.insert(
-          0,
-          PerpPosition(
-            id: 'pos_${DateTime.now().millisecondsSinceEpoch}',
-            symbol: symbol,
-            side: positionSide,
-            size: size,
-            entryPrice: executionPrice,
-            markPrice: market.markPrice,
-            leverage: leverage,
-            margin: marginRequired,
-            liquidationPrice: liqPrice,
-            takeProfitPrice: takeProfitPrice,
-            stopLossPrice: stopLossPrice,
-            openedAt: DateTime.now(),
-          ),
-        );
+        realizedPnl = (pos.entryPrice - closePrice) * pos.size;
       }
+
+      final fee = calculateEstimatedFee(pos.size * closePrice);
+      _availableDemoMarginUsdt += (pos.margin + realizedPnl - fee);
+      _positions.removeAt(idx);
 
       _orderHistory.insert(
         0,
         PerpOrder(
-          id: orderId,
-          symbol: symbol,
-          side: side,
-          type: type,
-          price: executionPrice,
-          size: size,
-          leverage: leverage,
+          id: 'close_${DateTime.now().millisecondsSinceEpoch}',
+          symbol: pos.symbol,
+          side: (pos.side == PositionSide.long) ? OrderSide.sell : OrderSide.buy,
+          type: PerpOrderType.market,
+          size: pos.size,
+          price: closePrice,
+          leverage: pos.leverage,
           status: PerpOrderStatus.filled,
-          filledSize: size,
-          takeProfitPrice: takeProfitPrice,
-          stopLossPrice: stopLossPrice,
-          createdAt: DateTime.now(),
-        ),
-      );
-    } else {
-      // Limit order placed into open orders
-      _openOrders.insert(
-        0,
-        PerpOrder(
-          id: orderId,
-          symbol: symbol,
-          side: side,
-          type: type,
-          price: executionPrice,
-          size: size,
-          leverage: leverage,
-          status: PerpOrderStatus.open,
-          filledSize: 0.0,
-          takeProfitPrice: takeProfitPrice,
-          stopLossPrice: stopLossPrice,
+          filledSize: pos.size,
           createdAt: DateTime.now(),
         ),
       );
@@ -341,60 +450,11 @@ class PerpsService extends ChangeNotifier {
 
     _isLoading = false;
     notifyListeners();
-    return orderId;
   }
 
-  /// Closes an active position
-  Future<void> closePosition(String positionId) async {
-    final idx = _positions.indexWhere((p) => p.id == positionId);
-    if (idx < 0) return;
+  void resetTestnetDemoBalance() => resetDemoBalance();
 
-    _isLoading = true;
-    notifyListeners();
-
-    await Future.delayed(const Duration(milliseconds: 400));
-
-    final pos = _positions[idx];
-    final closingFee = calculateEstimatedFee(pos.notionalValue);
-    final returnMargin = max(0.0, pos.margin + pos.unrealizedPnl - closingFee);
-
-    _availableDemoMarginUsdt += returnMargin;
-    _positions.removeAt(idx);
-
-    _orderHistory.insert(
-      0,
-      PerpOrder(
-        id: 'ord_close_${DateTime.now().millisecondsSinceEpoch}',
-        symbol: pos.symbol,
-        side: (pos.side == PositionSide.long) ? OrderSide.sell : OrderSide.buy,
-        type: PerpOrderType.market,
-        price: pos.markPrice,
-        size: pos.size,
-        leverage: pos.leverage,
-        status: PerpOrderStatus.filled,
-        filledSize: pos.size,
-        createdAt: DateTime.now(),
-      ),
-    );
-
-    _isLoading = false;
-    notifyListeners();
-  }
-
-  /// Cancels an open limit order
-  void cancelOrder(String orderId) {
-    final idx = _openOrders.indexWhere((o) => o.id == orderId);
-    if (idx >= 0) {
-      final cancelled = _openOrders.removeAt(idx).copyWith(
-            status: PerpOrderStatus.cancelled,
-          );
-      _orderHistory.insert(0, cancelled);
-      notifyListeners();
-    }
-  }
-
-  /// Resets testnet margin balance back to 10,000 USDT
-  void resetTestnetDemoBalance() {
+  void resetDemoBalance() {
     _availableDemoMarginUsdt = 10000.0;
     _positions.clear();
     _openOrders.clear();

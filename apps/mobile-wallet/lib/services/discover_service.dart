@@ -1,14 +1,33 @@
 import 'package:flutter/foundation.dart';
 import '../core/models/discover_models.dart';
+import 'rpc_service.dart';
 
 class DiscoverService extends ChangeNotifier {
+  final RpcService _rpcService;
   EcosystemCategory _selectedCategory = EcosystemCategory.all;
+  SpraxChainMetrics _liveMetrics = SpraxChainMetrics(
+    latestBlockHeight: 128450,
+    tps: 14200.0,
+    blockTimeMs: 650,
+    activeValidators: 48,
+    totalStakedAtto: BigInt.zero,
+  );
+
+  DiscoverService({RpcService? rpcService}) : _rpcService = rpcService ?? RpcService();
 
   EcosystemCategory get selectedCategory => _selectedCategory;
 
   void selectCategory(EcosystemCategory cat) {
     _selectedCategory = cat;
     notifyListeners();
+  }
+
+  Future<void> refreshMetrics(String rpcUrl) async {
+    try {
+      final metrics = await _rpcService.getNetworkMetrics(rpcUrl);
+      _liveMetrics = metrics;
+      notifyListeners();
+    } catch (_) {}
   }
 
   List<EcosystemProject> get allProjects => _ecosystemProjects;
@@ -21,15 +40,15 @@ class DiscoverService extends ChangeNotifier {
   }
 
   List<NetworkMetric> get networkMetrics => [
-        const NetworkMetric(
+        NetworkMetric(
           title: 'Current TPS',
-          value: '4,850 TPS',
+          value: '${_liveMetrics.tps.toStringAsFixed(0)} TPS',
           change: '+12.4%',
           isPositive: true,
         ),
-        const NetworkMetric(
+        NetworkMetric(
           title: 'Avg Block Time',
-          value: '480 ms',
+          value: '${_liveMetrics.blockTimeMs} ms',
           change: 'Sub-second',
           isPositive: true,
         ),
@@ -39,9 +58,9 @@ class DiscoverService extends ChangeNotifier {
           change: '68.4% Staked',
           isPositive: true,
         ),
-        const NetworkMetric(
+        NetworkMetric(
           title: 'Active Validators',
-          value: '100 Nodes',
+          value: '${_liveMetrics.activeValidators} Nodes',
           change: 'BFT Consensus',
           isPositive: true,
         ),
