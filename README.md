@@ -2,11 +2,12 @@
 
 # SPRX Protocol
 
-**Scalable Protocol for Real-world X**
+**Scalable Protocol for Real-world X — Sprax Chain**
 
-A Layer-1 blockchain built in Rust on a Cosmos SDK–inspired architecture — BFT-PoS consensus, native
-CosmWasm-style smart contracts, and a full application layer (wallets, explorer, admin panel, indexer,
-API backend) in one monorepo.
+SPRX is an open-source **Layer-1 blockchain** built in **Rust** on a Cosmos SDK–inspired architecture:
+**BFT proof-of-stake (BFT-PoS) consensus**, native **CosmWasm-style smart contracts**, and a full
+application layer — non-custodial **crypto wallet**, **block explorer**, admin panel, and FastAPI
+backend/indexer — in one monorepo.
 
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](rust-toolchain.toml)
