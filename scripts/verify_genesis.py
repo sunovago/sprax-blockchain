@@ -1,8 +1,11 @@
 import json
 import sys
 from decimal import Decimal, getcontext
+from pathlib import Path
 
 getcontext().prec = 60
+
+GENESIS_PATH = Path(__file__).resolve().parent.parent / "deploy" / "genesis" / "genesis.json"
 
 class bcolors:
     OKGREEN = '\033[92m'
@@ -21,7 +24,7 @@ def print_warn(msg):
 
 def main():
     try:
-        with open('d:/sprax-chain/deploy/genesis/genesis.json', 'r') as f:
+        with open(GENESIS_PATH, 'r') as f:
             genesis = json.load(f)
     except FileNotFoundError:
         print_fail("genesis.json not found")

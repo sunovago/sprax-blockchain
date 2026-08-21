@@ -307,6 +307,6 @@ flowchart TB
 
 * **Status**: **COMPLETE & PROPOSED**
 * **Approved Framework**: **Cosmos SDK (v0.50+) + CometBFT (v0.38+) with CosmWasm (Rust) + EVM Compatibility**
-* **Deliverable Created**: [**`docs/FRAMEWORK_SELECTION.md`**](file:///d:/sprax-chain/docs/FRAMEWORK_SELECTION.md)
+* **Deliverable Created**: [**`docs/FRAMEWORK_SELECTION.md`**](../docs/FRAMEWORK_SELECTION.md)
 
 > **Phase 02 is complete. Awaiting human approval of this framework selection before proceeding to Phase 03.**
