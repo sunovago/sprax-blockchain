@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # ---- SPRX Chain Node ----
+  node:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-node-devnet
+    environment:
+      - SPRAX_HOME=/root/.sprx
+      - SPRAX_CHAIN_ID=sprax-devnet-1
+      - SPRAX_P2P_PORT=26656
+      - SPRAX_RPC_PORT=26657
+    ports:
+      - "26656:26656"
+      - "26657:26657"
+    volumes:
+      - node_data:/root/.sprx
+    networks:
+      - sprax-net
+
+  # ---- PostgreSQL Database ----
+  postgres:
+    image: postgres:16-alpine
+    container_name: sprax-postgres-devnet
+    environment:
+      POSTGRES_USER: sprax
+      POSTGRES_PASSWORD: sprax
+      POSTGRES_DB: sprax
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - sprax-net
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sprax"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---- Redis Cache ----
+  redis:
+    image: redis:7-alpine
+    container_name: sprax-redis-devnet
+    ports:
+      - "6379:6379"
+    networks:
+      - sprax-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  # ---- FastAPI Backend Core ----
+  backend-api:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: sprax-backend-api
+    environment:
+      - APP_ENV=development
+      - DATABASE_URL=postgresql+asyncpg://sprax:sprax@postgres:5432/sprax
+      - REDIS_URL=redis://redis:6379/0
+      - SPRAX_RPC_URL=http://node:26657
+      - SPRAX_CHAIN_ID=sprax-devnet-1
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      node:
+        condition: service_started
+    networks:
+      - sprax-net
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000
+
+  # ---- Indexer & Background Worker ----
+  backend-worker:
+    build:
+      context: ../backend
+      dockerfile: Dockerfile
+    container_name: sprax-backend-worker
+    environment:
+      - APP_ENV=development
+      - DATABASE_URL=postgresql+asyncpg://sprax:sprax@postgres:5432/sprax
+      - REDIS_URL=redis://redis:6379/0
+      - SPRAX_RPC_URL=http://node:26657
+      - SPRAX_CHAIN_ID=sprax-devnet-1
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      node:
+        condition: service_started
+    networks:
+      - sprax-net
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+
+volumes:
+  node_data:
+  postgres_data:
+
+networks:
+  sprax-net:
+    driver: bridge

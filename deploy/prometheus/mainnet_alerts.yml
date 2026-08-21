@@ -1,0 +1,119 @@
+# SPRAX Mainnet — Prometheus Alert Rules
+groups:
+  - name: sprax_chain
+    interval: 30s
+    rules:
+
+      - alert: SpraxValidatorMissedBlocks
+        expr: sprax_validator_missed_blocks_total > 50
+        for: 5m
+        labels:
+          severity: warning
+          team: validators
+        annotations:
+          summary: "Validator missing blocks: {{ $labels.operator_address }}"
+          description: "Validator {{ $labels.moniker }} has missed {{ $value }} blocks in the last window. Risk of downtime slash."
+
+      - alert: SpraxValidatorJailed
+        expr: sprax_validator_jailed == 1
+        for: 1m
+        labels:
+          severity: critical
+          team: validators
+        annotations:
+          summary: "CRITICAL: Validator jailed — {{ $labels.moniker }}"
+          description: "Validator {{ $labels.operator_address }} has been jailed. Immediate investigation required."
+
+      - alert: SpraxChainHalted
+        expr: time() - sprax_latest_block_timestamp_seconds > 30
+        for: 2m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "CRITICAL: Sprax chain may have halted"
+          description: "No new blocks for >30 seconds. Latest block was {{ $value }}s ago."
+
+      - alert: SpraxRPCDown
+        expr: up{job="sprax-rpc"} == 0
+        for: 2m
+        labels:
+          severity: critical
+          team: sre
+        annotations:
+          summary: "Sprax RPC node is DOWN"
+          description: "RPC endpoint {{ $labels.instance }} is not responding."
+
+      - alert: SpraxSentryPeerCountLow
+        expr: sprax_p2p_peer_count < 5
+        for: 5m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Sentry node has low peer count"
+          description: "Sentry {{ $labels.instance }} only has {{ $value }} peers. Network isolation risk."
+
+      - alert: SpraxMempoolSizeHigh
+        expr: sprax_mempool_size > 5000
+        for: 10m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Mempool congestion detected"
+          description: "Mempool has {{ $value }} pending transactions."
+
+      - alert: SpraxIndexerLagHigh
+        expr: sprax_indexer_lag_blocks > 100
+        for: 5m
+        labels:
+          severity: warning
+          team: indexer
+        annotations:
+          summary: "Indexer falling behind chain"
+          description: "Indexer is {{ $value }} blocks behind the chain tip."
+
+      - alert: SpraxAPIErrorRateHigh
+        expr: rate(http_requests_total{status=~"5.."}[5m]) / rate(http_requests_total[5m]) > 0.05
+        for: 5m
+        labels:
+          severity: warning
+          team: api
+        annotations:
+          summary: "API error rate above 5%"
+          description: "{{ $value | humanizePercentage }} of API requests are failing."
+
+      - alert: SpraxDiskUsageHigh
+        expr: (node_filesystem_size_bytes{mountpoint="/"} - node_filesystem_free_bytes{mountpoint="/"}) / node_filesystem_size_bytes{mountpoint="/"} > 0.80
+        for: 10m
+        labels:
+          severity: warning
+          team: sre
+        annotations:
+          summary: "Disk usage above 80% on {{ $labels.instance }}"
+          description: "Node disk is {{ $value | humanizePercentage }} full. Archive node grows ~2GB/day."
+
+  - name: sprax_security
+    interval: 60s
+    rules:
+
+      - alert: SpraxEquivocationDetected
+        expr: sprax_slashing_events_total{reason="equivocation"} > 0
+        for: 1m
+        labels:
+          severity: critical
+          team: security
+        annotations:
+          summary: "SECURITY: Double-signing / equivocation detected"
+          description: "A validator equivocation event was detected. Immediate investigation required."
+
+      - alert: SpraxUnexpectedValidatorSetChange
+        expr: changes(sprax_active_validator_count[10m]) > 3
+        for: 5m
+        labels:
+          severity: warning
+          team: security
+        annotations:
+          summary: "Unusual validator set churn detected"
+          description: "Validator count changed {{ $value }} times in 10 minutes."

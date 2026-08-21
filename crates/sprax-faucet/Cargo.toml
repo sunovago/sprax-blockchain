@@ -1,0 +1,30 @@
+[package]
+name = "sprax-faucet"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "SPRX Public Testnet Faucet Service with rate limiting, anti-abuse protection, and audit logging"
+
+[lints]
+workspace = true
+
+[dependencies]
+sprax-types.workspace = true
+sprax-crypto.workspace = true
+sprax-storage = { workspace = true, features = ["redb-store"] }
+sprax-core.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+tokio.workspace = true
+axum.workspace = true
+tower.workspace = true
+tower-http.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

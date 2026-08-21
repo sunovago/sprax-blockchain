@@ -1,0 +1,210 @@
+# =========================================================
+# SPRX — Scalable Protocol for Real-world X
+# Monorepo Git Ignore
+# =========================================================
+
+
+# ---------------------------------------------------------
+# Rust / Cargo
+# ---------------------------------------------------------
+
+/target/
+**/target/
+**/*.rs.bk
+*.pdb
+
+
+# ---------------------------------------------------------
+# Python / FastAPI Backend
+# ---------------------------------------------------------
+
+__pycache__/
+**/__pycache__/
+*.py[cod]
+*$py.class
+
+.venv/
+venv/
+env/
+
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+coverage.xml
+htmlcov/
+
+
+# ---------------------------------------------------------
+# Node.js / React / Explorer / Admin
+# ---------------------------------------------------------
+
+node_modules/
+**/node_modules/
+
+dist/
+**/dist/
+
+.next/
+.nuxt/
+.vite/
+
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+
+# ---------------------------------------------------------
+# Flutter / Dart Wallet
+# ---------------------------------------------------------
+
+.dart_tool/
+.packages
+.pub-cache/
+
+.flutter-plugins
+.flutter-plugins-dependencies
+
+**/build/
+
+android/.gradle/
+**/android/.gradle/
+
+android/local.properties
+**/android/local.properties
+
+ios/Pods/
+**/ios/Pods/
+
+*.iml
+
+
+# ---------------------------------------------------------
+# Environment Variables
+# ---------------------------------------------------------
+
+.env
+.env.*
+!.env.example
+
+**/.env
+**/.env.*
+!**/.env.example
+
+
+# ---------------------------------------------------------
+# Secrets / Cryptographic Keys
+# ---------------------------------------------------------
+
+/secrets/
+**/secrets/
+
+*.key
+*.pem
+*.p12
+*.pfx
+*.keystore
+*.jks
+
+*.mnemonic
+*.seed
+
+private_keys/
+**/private_keys/
+
+validator_keys/
+**/validator_keys/
+
+
+# ---------------------------------------------------------
+# Blockchain / Node Runtime Data
+# ---------------------------------------------------------
+
+/data/
+**/data/
+
+node-data/
+**/node-data/
+
+chain-data/
+**/chain-data/
+
+wallet-data/
+**/wallet-data/
+
+
+# ---------------------------------------------------------
+# SPRX Local Development
+# ---------------------------------------------------------
+
+.sprx-demo/
+
+scratch/
+**/scratch/
+
+tmp/
+temp/
+
+
+# ---------------------------------------------------------
+# Database Local Files
+# ---------------------------------------------------------
+
+*.db
+*.sqlite
+*.sqlite3
+
+postgres-data/
+redis-data/
+
+
+# ---------------------------------------------------------
+# Logs
+# ---------------------------------------------------------
+
+*.log
+logs/
+**/logs/
+
+
+# ---------------------------------------------------------
+# Coverage
+# ---------------------------------------------------------
+
+coverage/
+**/coverage/
+
+
+# ---------------------------------------------------------
+# IDE / Editors
+# ---------------------------------------------------------
+
+.idea/
+.vscode/
+
+*.swp
+*.swo
+*~
+
+
+# ---------------------------------------------------------
+# Operating System
+# ---------------------------------------------------------
+
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+
+# ---------------------------------------------------------
+# Temporary / Backup Files
+# ---------------------------------------------------------
+
+*.tmp
+*.temp
+*.bak
+*.backup
+# SPRX generated/test runtime
+**/.sprx_test_runtime/
+**/.sprx_test_runtime/

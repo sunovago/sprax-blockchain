@@ -1,0 +1,101 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/sprax-types",
+    "crates/sprax-crypto",
+    "crates/sprax-storage",
+    "crates/sprax-network",
+    "crates/sprax-consensus",
+    "crates/sprax-core",
+    "crates/sprax-node",
+    "crates/sprax-cli",
+    "crates/sprax-indexer",
+    "crates/sprax-wasm",
+    "crates/sprax-faucet",
+]
+default-members = [
+    "crates/sprax-cli",
+    "crates/sprax-node",
+    "crates/sprax-indexer",
+    "crates/sprax-wasm",
+    "crates/sprax-faucet",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.80.0"
+authors = ["SPRX Protocol Core Contributors"]
+license = "Apache-2.0 OR MIT"
+repository = "https://github.com/sprax-chain/sprax"
+homepage = "https://sprax.network"
+
+[workspace.lints.rust]
+unsafe_code = "deny"
+missing_debug_implementations = "warn"
+unreachable_pub = "warn"
+unused_imports = "warn"
+unused_variables = "warn"
+
+[workspace.lints.clippy]
+all = { level = "warn", priority = -1 }
+correctness = { level = "deny", priority = 0 }
+suspicious = { level = "warn", priority = 0 }
+complexity = { level = "warn", priority = 0 }
+perf = { level = "warn", priority = 0 }
+style = { level = "warn", priority = 0 }
+
+[workspace.dependencies]
+# Internal Workspace Crates
+sprax-types = { path = "crates/sprax-types", version = "0.1.0" }
+sprax-crypto = { path = "crates/sprax-crypto", version = "0.1.0" }
+sprax-storage = { path = "crates/sprax-storage", version = "0.1.0" }
+sprax-network = { path = "crates/sprax-network", version = "0.1.0" }
+sprax-consensus = { path = "crates/sprax-consensus", version = "0.1.0" }
+sprax-core = { path = "crates/sprax-core", version = "0.1.0" }
+sprax-node = { path = "crates/sprax-node", version = "0.1.0" }
+sprax-indexer = { path = "crates/sprax-indexer", version = "0.1.0" }
+sprax-wasm = { path = "crates/sprax-wasm", version = "0.1.0" }
+sprax-faucet = { path = "crates/sprax-faucet", version = "0.1.0" }
+
+# Error Handling & Utilities
+thiserror = "2.0"
+anyhow = "1.0"
+async-trait = "0.1"
+parking_lot = "0.12"
+tempfile = "3.12"
+bytes = "1.7"
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+hex = { version = "0.4", features = ["serde"] }
+bech32 = "0.11"
+
+# Persistent storage (pure-Rust embedded KV store; see docs/ROADMAP.md storage notes —
+# RocksDB was evaluated but needs cmake+libclang which aren't available in this environment)
+redb = "2.2"
+
+# Cryptography & Hashing
+ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
+k256 = { version = "0.13", features = ["ecdsa", "arithmetic", "pkcs8", "serde"] }
+blake3 = { version = "1.5", features = ["serde"] }
+sha2 = "0.10"
+rand = "0.8"
+rand_core = { version = "0.6", features = ["std"] }
+zeroize = { version = "1.8", features = ["derive"] }
+bip39 = "2.1"
+
+# CLI & Configuration
+clap = { version = "4.5", features = ["derive", "env"] }
+
+# Networking & HTTP Server
+tokio = { version = "1.40", features = ["full"] }
+axum = "0.7"
+tower = "0.4"
+tower-http = { version = "0.5", features = ["cors", "trace"] }
+
+# Logging & Telemetry
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json", "fmt"] }

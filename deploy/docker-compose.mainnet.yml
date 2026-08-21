@@ -1,0 +1,200 @@
+version: '3.9'
+
+# SPRX Mainnet Production Deployment
+# Chain ID: sprax-mainnet-1
+# WARNING: Never expose validator private keys. Use HSM or hardware key storage in production.
+
+services:
+
+  # ============================================================
+  # SENTRY NODE 1 (Public-facing, shields validator from DDoS)
+  # ============================================================
+  sentry-1:
+    image: spraxnetwork/sprax-node:1.0.0
+    container_name: sprax-sentry-1
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-mainnet-1
+      - SPRAX_ROLE=sentry
+      - SPRAX_NODE_ID=sentry-1
+      - SPRAX_P2P_LADDR=0.0.0.0:26656
+      - SPRAX_RPC_LADDR=0.0.0.0:26657
+      - SPRAX_MAX_PEERS=100
+      - SPRAX_PERSISTENT_PEERS=${SENTRY1_PERSISTENT_PEERS}
+    ports:
+      - "26656:26656"
+      - "26657:26657"
+    volumes:
+      - sentry1_data:/home/sprax/.sprax
+      - ./genesis/genesis.json:/home/sprax/.sprax/config/genesis.json:ro
+    networks:
+      - sprax-public
+      - sprax-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:26657/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  # ============================================================
+  # SENTRY NODE 2 (Redundant sentry for HA)
+  # ============================================================
+  sentry-2:
+    image: spraxnetwork/sprax-node:1.0.0
+    container_name: sprax-sentry-2
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-mainnet-1
+      - SPRAX_ROLE=sentry
+      - SPRAX_NODE_ID=sentry-2
+      - SPRAX_P2P_LADDR=0.0.0.0:26656
+      - SPRAX_RPC_LADDR=0.0.0.0:26657
+      - SPRAX_MAX_PEERS=100
+      - SPRAX_PERSISTENT_PEERS=${SENTRY2_PERSISTENT_PEERS}
+    volumes:
+      - sentry2_data:/home/sprax/.sprax
+      - ./genesis/genesis.json:/home/sprax/.sprax/config/genesis.json:ro
+    networks:
+      - sprax-internal
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ============================================================
+  # VALIDATOR NODE (Private — only reachable from sentries)
+  # NEVER expose validator RPC/P2P ports directly to internet
+  # ============================================================
+  validator:
+    image: spraxnetwork/sprax-node:1.0.0
+    container_name: sprax-validator
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-mainnet-1
+      - SPRAX_ROLE=validator
+      - SPRAX_NODE_ID=validator
+      - SPRAX_P2P_LADDR=0.0.0.0:26656
+      - SPRAX_RPC_LADDR=127.0.0.1:26657
+      # Only connect to sentries, never to public peers
+      - SPRAX_PERSISTENT_PEERS=${VALIDATOR_SENTRY_PEERS}
+      - SPRAX_PRIVATE_PEER_IDS=${VALIDATOR_PRIVATE_PEER_IDS}
+      - SPRAX_PEX=false
+      - SPRAX_ADDR_BOOK_STRICT=false
+    volumes:
+      - validator_data:/home/sprax/.sprax
+      - ./genesis/genesis.json:/home/sprax/.sprax/config/genesis.json:ro
+      # Mount validator key from host — use HSM in production
+      - ${VALIDATOR_KEY_PATH}:/home/sprax/.sprax/config/priv_validator_key.json:ro
+    networks:
+      - sprax-internal
+    # No ports exposed to public network
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "100m"
+        max-file: "5"
+
+  # ============================================================
+  # ARCHIVE / RPC NODE (Full history, for indexer + explorer)
+  # ============================================================
+  archive:
+    image: spraxnetwork/sprax-node:1.0.0
+    container_name: sprax-archive
+    restart: unless-stopped
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-mainnet-1
+      - SPRAX_ROLE=archive
+      - SPRAX_PRUNING=nothing
+      - SPRAX_RPC_LADDR=0.0.0.0:26657
+    volumes:
+      - archive_data:/home/sprax/.sprax
+      - ./genesis/genesis.json:/home/sprax/.sprax/config/genesis.json:ro
+    networks:
+      - sprax-public
+      - sprax-internal
+
+  # ============================================================
+  # NGINX — Load Balancer + RPC Gateway
+  # ============================================================
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: sprax-nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./nginx/mainnet.conf:/etc/nginx/nginx.conf:ro
+      - /etc/letsencrypt:/etc/letsencrypt:ro
+    depends_on:
+      - sentry-1
+      - archive
+    networks:
+      - sprax-public
+
+  # ============================================================
+  # PROMETHEUS + GRAFANA Monitoring
+  # ============================================================
+  prometheus:
+    image: prom/prometheus:v2.48.0
+    container_name: sprax-prometheus
+    restart: unless-stopped
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/mainnet_alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--storage.tsdb.retention.time=90d'
+      - '--web.enable-lifecycle'
+    ports:
+      - "9090:9090"
+    networks:
+      - sprax-internal
+
+  grafana:
+    image: grafana/grafana:10.2.2
+    container_name: sprax-grafana
+    restart: unless-stopped
+    environment:
+      - GF_SECURITY_ADMIN_USER=${GRAFANA_ADMIN_USER:-admin}
+      - GF_SECURITY_ADMIN_PASSWORD=${GRAFANA_ADMIN_PASSWORD}
+      - GF_SERVER_ROOT_URL=https://monitoring.sprax.network
+      - GF_SMTP_ENABLED=true
+      - GF_SMTP_HOST=${SMTP_HOST}
+      - GF_SMTP_USER=${SMTP_USER}
+      - GF_SMTP_PASSWORD=${SMTP_PASSWORD}
+      - GF_SMTP_FROM_ADDRESS=alerts@sprax.network
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana:/etc/grafana/provisioning:ro
+    ports:
+      - "3000:3000"
+    networks:
+      - sprax-internal
+
+volumes:
+  sentry1_data:
+  sentry2_data:
+  validator_data:
+  archive_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  sprax-public:
+    driver: bridge
+  sprax-internal:
+    driver: bridge
+    internal: true

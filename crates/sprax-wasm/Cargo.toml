@@ -1,0 +1,26 @@
+[package]
+name = "sprax-wasm"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "SPRX Smart Contract Virtual Machine Runtime, CosmWasm compatibility engine, and standard contracts"
+
+[lints]
+workspace = true
+
+[dependencies]
+sprax-types.workspace = true
+sprax-crypto.workspace = true
+sprax-storage.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

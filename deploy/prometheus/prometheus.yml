@@ -1,0 +1,24 @@
+global:
+  scrape_interval: 5s
+  evaluation_interval: 5s
+
+scrape_configs:
+  - job_name: "sprax-validators"
+    static_configs:
+      - targets:
+          - "node1:26660"
+          - "node2:26660"
+          - "node3:26660"
+          - "node4:26660"
+
+  - job_name: "sprax-rpc"
+    static_configs:
+      - targets: ["rpc-node:26660"]
+
+  - job_name: "sprax-faucet"
+    static_configs:
+      - targets: ["faucet:8080"]
+
+  - job_name: "sprax-indexer"
+    static_configs:
+      - targets: ["indexer:8081"]

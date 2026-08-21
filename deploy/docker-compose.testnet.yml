@@ -1,0 +1,136 @@
+version: '3.8'
+
+services:
+  # Seed / Bootnode
+  seed-node:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-seed
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-testnet-1
+      - SPRAX_ROLE=seed
+    ports:
+      - "26656:26656"
+    networks:
+      - sprax-testnet
+
+  # 4-Validator BFT Cluster
+  val-node-1:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-val-1
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-testnet-1
+      - SPRAX_ROLE=validator
+    depends_on:
+      - seed-node
+    networks:
+      - sprax-testnet
+
+  val-node-2:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-val-2
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-testnet-1
+      - SPRAX_ROLE=validator
+    depends_on:
+      - seed-node
+    networks:
+      - sprax-testnet
+
+  val-node-3:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-val-3
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-testnet-1
+      - SPRAX_ROLE=validator
+    depends_on:
+      - seed-node
+    networks:
+      - sprax-testnet
+
+  val-node-4:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-val-4
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-testnet-1
+      - SPRAX_ROLE=validator
+    depends_on:
+      - seed-node
+    networks:
+      - sprax-testnet
+
+  # Public JSON-RPC Gateway
+  rpc-node:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-rpc
+    ports:
+      - "26657:26657"
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-testnet-1
+      - SPRAX_ROLE=rpc
+    depends_on:
+      - seed-node
+    networks:
+      - sprax-testnet
+
+  # Faucet Service
+  faucet:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile
+    container_name: sprax-faucet
+    ports:
+      - "8080:8080"
+    environment:
+      - RUST_LOG=info
+      - SPRAX_CHAIN_ID=sprax-testnet-1
+      - SPRAX_FAUCET_PAYOUT_LIMIT=100
+      - SPRAX_RATE_LIMIT_SECS=86400
+    depends_on:
+      - rpc-node
+    networks:
+      - sprax-testnet
+
+  # Monitoring: Prometheus
+  prometheus:
+    image: prom/prometheus:v2.45.0
+    container_name: sprax-prometheus
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+    ports:
+      - "9090:9090"
+    networks:
+      - sprax-testnet
+
+  # Monitoring: Grafana
+  grafana:
+    image: grafana/grafana:10.0.3
+    container_name: sprax-grafana
+    ports:
+      - "3000:3000"
+    environment:
+      - GF_SECURITY_ADMIN_USER=admin
+      - GF_SECURITY_ADMIN_PASSWORD=spraxdev
+    networks:
+      - sprax-testnet
+
+networks:
+  sprax-testnet:
+    driver: bridge

@@ -1,0 +1,78 @@
+version: '3.8'
+
+services:
+  node1:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: sprax-node1
+    environment:
+      - SPRAX_HOME=/root/.sprx
+      - SPRAX_CHAIN_ID=sprax-devnet-1
+      - SPRAX_P2P_PORT=26656
+      - SPRAX_RPC_PORT=26657
+    ports:
+      - "26656:26656"
+      - "26657:26657"
+    volumes:
+      - node1_data:/root/.sprx
+    networks:
+      sprax-net:
+        ipv4_address: 172.28.0.11
+
+  node2:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: sprax-node2
+    environment:
+      - SPRAX_HOME=/root/.sprx
+      - SPRAX_CHAIN_ID=sprax-devnet-1
+      - SPRAX_P2P_PORT=26656
+      - SPRAX_RPC_PORT=26657
+      - SPRAX_PEERS=172.28.0.11:26656
+    ports:
+      - "26666:26656"
+      - "26667:26657"
+    volumes:
+      - node2_data:/root/.sprx
+    depends_on:
+      - node1
+    networks:
+      sprax-net:
+        ipv4_address: 172.28.0.12
+
+  node3:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    container_name: sprax-node3
+    environment:
+      - SPRAX_HOME=/root/.sprx
+      - SPRAX_CHAIN_ID=sprax-devnet-1
+      - SPRAX_P2P_PORT=26656
+      - SPRAX_RPC_PORT=26657
+      - SPRAX_PEERS=172.28.0.11:26656,172.28.0.12:26656
+    ports:
+      - "26676:26656"
+      - "26677:26657"
+    volumes:
+      - node3_data:/root/.sprx
+    depends_on:
+      - node1
+      - node2
+    networks:
+      sprax-net:
+        ipv4_address: 172.28.0.13
+
+volumes:
+  node1_data:
+  node2_data:
+  node3_data:
+
+networks:
+  sprax-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.28.0.0/16

@@ -1,0 +1,129 @@
+{
+  "chainId": "sprax-mainnet-1",
+  "genesisTime": "2026-09-01T00:00:00Z",
+  "genesisTimeUnixSecs": 1756684800,
+  "initialHeight": 0,
+  "appVersion": "1.0.0",
+  "consensusParams": {
+    "blockTimeTargetMs": 1500,
+    "maxBlockGas": 20000000,
+    "maxBlockSizeBytes": 4194304,
+    "minGasPriceAtto": "1000000000",
+    "evidenceMaxAgeBlocks": 100000,
+    "evidenceMaxAgeSeconds": 172800
+  },
+  "stakingParams": {
+    "unbondingPeriodBlocks": 1209600,
+    "maxValidators": 100,
+    "minSelfDelegationAtto": "1000000000000000000000",
+    "equivocationSlashRate": "0.05",
+    "downtimeSlashRate": "0.0001",
+    "signedBlocksWindow": 10000,
+    "minSignedPerWindow": "0.50",
+    "slashingEnabled": true
+  },
+  "mintParams": {
+    "inflationRateAnnualPct": "0.05",
+    "inflationMin": "0.02",
+    "inflationMax": "0.08",
+    "blocksPerYear": 21000000
+  },
+  "governanceParams": {
+    "minDepositSprx": "10000",
+    "maxDepositPeriodSeconds": 1209600,
+    "votingPeriodSeconds": 604800,
+    "quorumPct": "0.334",
+    "thresholdPct": "0.50",
+    "vetoThresholdPct": "0.334"
+  },
+  "totalSupplyAtto": "1000000000000000000000000000",
+  "totalSupplySprx": "1000000000",
+  "supplyVerified": true,
+  "allocationSchedule": {
+    "communityPool": {
+      "pct": "40.0",
+      "amountSprx": "400000000",
+      "amountAtto": "400000000000000000000000000",
+      "address": "sprax1communitypool000000000000000000000000",
+      "vestingTerms": "Governed via on-chain proposals"
+    },
+    "ecosystemGrants": {
+      "pct": "25.0",
+      "amountSprx": "250000000",
+      "amountAtto": "250000000000000000000000000",
+      "address": "sprax1ecosystem0grants00000000000000000000",
+      "vestingTerms": "2-year linear grant disbursement via multi-sig"
+    },
+    "treasuryReserve": {
+      "pct": "15.0",
+      "amountSprx": "150000000",
+      "amountAtto": "150000000000000000000000000",
+      "address": "sprax1treasury0reserve00000000000000000000",
+      "vestingTerms": "Multi-sig operational treasury — 3/5 threshold"
+    },
+    "validatorIncentives": {
+      "pct": "10.0",
+      "amountSprx": "100000000",
+      "amountAtto": "100000000000000000000000000",
+      "address": "sprax1validator0incentives000000000000000",
+      "vestingTerms": "Genesis staking incentives — linear 3 years"
+    },
+    "coreContributors": {
+      "pct": "10.0",
+      "amountSprx": "100000000",
+      "amountAtto": "100000000000000000000000000",
+      "address": "sprax1core0contributors000000000000000000",
+      "vestingTerms": "1-year cliff + 4-year linear vesting"
+    }
+  },
+  "genesisValidators": [
+    {
+      "operatorAddress": "spraxvaloper1genesis0validator01000000000000000000",
+      "consensusPubkey": "GENESIS_VAL_01_PUBKEY_PLACEHOLDER",
+      "moniker": "SPRAX Core Foundation",
+      "identity": "SPRAX_CORE_FOUNDATION",
+      "website": "https://sprax.network",
+      "details": "Official genesis validator operated by the SPRAX core team.",
+      "commissionRate": "0.05",
+      "commissionMaxRate": "0.20",
+      "commissionMaxChangeRate": "0.01",
+      "selfDelegationAtto": "5000000000000000000000000",
+      "selfDelegationSprx": "5000000"
+    },
+    {
+      "operatorAddress": "spraxvaloper1genesis0validator02000000000000000000",
+      "consensusPubkey": "GENESIS_VAL_02_PUBKEY_PLACEHOLDER",
+      "moniker": "SPRAX Infrastructure Labs",
+      "identity": "SPRAX_INFRA",
+      "website": "https://infra.sprax.network",
+      "details": "Infrastructure validator for SPRAX protocol stability.",
+      "commissionRate": "0.05",
+      "commissionMaxRate": "0.20",
+      "commissionMaxChangeRate": "0.01",
+      "selfDelegationAtto": "3000000000000000000000000",
+      "selfDelegationSprx": "3000000"
+    },
+    {
+      "operatorAddress": "spraxvaloper1genesis0validator03000000000000000000",
+      "consensusPubkey": "GENESIS_VAL_03_PUBKEY_PLACEHOLDER",
+      "moniker": "SPRAX Security Council",
+      "identity": "SPRAX_SECURITY",
+      "website": "https://security.sprax.network",
+      "details": "Security-focused validator with HSM key storage.",
+      "commissionRate": "0.05",
+      "commissionMaxRate": "0.20",
+      "commissionMaxChangeRate": "0.01",
+      "selfDelegationAtto": "2000000000000000000000000",
+      "selfDelegationSprx": "2000000"
+    }
+  ],
+  "genesisSignatures": {
+    "coreTeamMultisig": "GENESIS_MULTISIG_SIGNATURE_PLACEHOLDER",
+    "ceremonyTimestamp": "CEREMONY_TIMESTAMP_PLACEHOLDER",
+    "ceremonyParticipants": []
+  },
+  "checksum": {
+    "algorithm": "SHA-256",
+    "value": "GENESIS_CHECKSUM_PLACEHOLDER"
+  }
+}

@@ -1,0 +1,29 @@
+[package]
+name = "sprax-network"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Peer-to-Peer network abstractions, GossipSub topics, peer scoring, and connection profiles for SPRX"
+
+[lints]
+workspace = true
+
+[dependencies]
+sprax-types.workspace = true
+sprax-crypto.workspace = true
+sprax-consensus.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+tokio.workspace = true
+parking_lot.workspace = true
+tracing.workspace = true
+bytes.workspace = true
+
+[dev-dependencies]
+sprax-core.workspace = true
+sprax-storage.workspace = true
+tempfile.workspace = true

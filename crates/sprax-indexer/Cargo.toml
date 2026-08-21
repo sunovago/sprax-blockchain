@@ -1,0 +1,30 @@
+[package]
+name = "sprax-indexer"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "SPRX Blockchain Indexer, relational query engine, consistency auditor, and Explorer API server"
+
+[lints]
+workspace = true
+
+[dependencies]
+sprax-types.workspace = true
+sprax-crypto.workspace = true
+sprax-storage.workspace = true
+sprax-core.workspace = true
+sprax-consensus.workspace = true
+sprax-node.workspace = true
+thiserror.workspace = true
+anyhow.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+parking_lot.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

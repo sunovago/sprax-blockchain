@@ -1,0 +1,23 @@
+[package]
+name = "sprax-consensus"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Consensus state machine models, validator sets, voting rules, and evidence verification for SPRX"
+
+[lints]
+workspace = true
+
+[dependencies]
+sprax-types.workspace = true
+sprax-crypto.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+
+[dev-dependencies]
+sprax-core.workspace = true
+sprax-storage.workspace = true
+tempfile.workspace = true

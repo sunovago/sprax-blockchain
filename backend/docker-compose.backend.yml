@@ -1,0 +1,92 @@
+version: '3.9'
+
+services:
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sprax-api
+    env_file: .env
+    ports:
+      - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sprax-backend
+    restart: unless-stopped
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --workers 2
+
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sprax-worker
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sprax-backend
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app worker --loglevel=info --concurrency=2
+
+  scheduler:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: sprax-scheduler
+    env_file: .env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - sprax-backend
+    restart: unless-stopped
+    command: celery -A app.workers.celery_app beat --loglevel=info
+
+  postgres:
+    image: postgres:16-alpine
+    container_name: sprax-postgres
+    environment:
+      POSTGRES_USER: sprax
+      POSTGRES_PASSWORD: sprax
+      POSTGRES_DB: sprax
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - sprax-backend
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sprax"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    container_name: sprax-redis
+    ports:
+      - "6379:6379"
+    networks:
+      - sprax-backend
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    command: redis-server --appendonly yes
+
+volumes:
+  postgres_data:
+
+networks:
+  sprax-backend:
+    driver: bridge

@@ -1,0 +1,7 @@
+pool_name,address,amount_sprx,amount_atto,pct,vesting_type,vesting_months
+community_pool,sprax1communitypool000000000000000000000000,400000000,400000000000000000000000000,40.0,Governed via on-chain proposals,0
+ecosystem_grants,sprax1ecosystem0grants00000000000000000000,250000000,250000000000000000000000000,25.0,2-year linear grant disbursement via multi-sig,24
+treasury_reserve,sprax1treasury0reserve00000000000000000000,150000000,150000000000000000000000000,15.0,Multi-sig operational treasury — 3/5 threshold,0
+validator_incentives,sprax1validator0incentives000000000000000,100000000,100000000000000000000000000,10.0,Genesis staking incentives — linear 3 years,36
+core_contributors,sprax1core0contributors000000000000000000,100000000,100000000000000000000000000,10.0,1-year cliff + 4-year linear vesting,60
+TOTAL,,1000000000,1000000000000000000000000000,100.0,,

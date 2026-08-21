@@ -1,0 +1,20 @@
+[package]
+name = "sprax-types"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+authors.workspace = true
+repository.workspace = true
+description = "Core domain types, identifiers, transactions, and block structures for the SPRX Protocol"
+
+[lints]
+workspace = true
+
+[dependencies]
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+hex.workspace = true
+bech32.workspace = true
+
+[dev-dependencies]
