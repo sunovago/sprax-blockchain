@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "description": "Core cryptographic wallet, BIP-39/44 derivation, offline signing, and RPC client for SPRX blockchain",
   "main": "dist/index.js",
+  "module": "dist/index.js",
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",

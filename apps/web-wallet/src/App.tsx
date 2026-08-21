@@ -23,9 +23,9 @@ export const App: React.FC = () => {
 
   const handleVaultCreated = async (mnemonic: string, password: string) => {
     try {
-      const derivedAccount = await HDWallet.deriveAccountFromMnemonic(mnemonic, 0);
-      const derivedPrivKey = await HDWallet.derivePrivateKeyFromMnemonic(mnemonic, 0);
-      const encryptedVault = await WalletVault.encrypt(mnemonic, password, [derivedAccount]);
+      const wallet = HDWallet.fromMnemonic(mnemonic);
+      const { account: derivedAccount, privateKey: derivedPrivKey } = wallet.deriveAccount(0);
+      const encryptedVault = await WalletVault.encrypt(mnemonic, password, 1);
 
       setAccount(derivedAccount);
       setPrivateKey(derivedPrivKey);
