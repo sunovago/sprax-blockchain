@@ -115,6 +115,10 @@ private_keys/
 
 validator_keys/
 **/validator_keys/
+validator_keys_*/
+**/validator_keys_*/
+key_info.json
+**/key_info.json
 
 
 # ---------------------------------------------------------
