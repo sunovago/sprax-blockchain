@@ -50,4 +50,33 @@ describe("Explorer API Service", () => {
     expect(result).toBeDefined();
     expect(result?.type).toBe("Address");
   });
+
+  it("fetches ecosystem projects directory", async () => {
+    const projs = await apiService.getEcosystemProjects();
+    expect(projs.length).toBeGreaterThan(0);
+    expect(projs[0]).toHaveProperty("name");
+    expect(projs[0]).toHaveProperty("category");
+  });
+
+  it("fetches market assets and tickers", async () => {
+    const assets = await apiService.getMarketAssets();
+    expect(assets.length).toBeGreaterThan(0);
+    expect(assets[0].symbol).toBe("SPRX");
+    expect(assets[0].priceUsd).toBeGreaterThan(0);
+  });
+
+  it("fetches SIP proposals list and single SIP", async () => {
+    const sips = await apiService.getSIPs();
+    expect(sips.length).toBeGreaterThan(0);
+    const sip1 = await apiService.getSIP(1);
+    expect(sip1).toBeDefined();
+    expect(sip1?.sipNumber).toBe("SIP-001");
+  });
+
+  it("fetches governance proposals and research papers", async () => {
+    const gov = await apiService.getGovernanceProposals();
+    const research = await apiService.getResearchPapers();
+    expect(gov.length).toBeGreaterThan(0);
+    expect(research.length).toBeGreaterThan(0);
+  });
 });

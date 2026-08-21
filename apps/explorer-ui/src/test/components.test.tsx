@@ -4,6 +4,7 @@ import { StatusBadge } from "@/components/StatusBadge";
 import { MetricCard } from "@/components/MetricCard";
 import { CopyButton } from "@/components/CopyButton";
 import { SearchBar } from "@/components/SearchBar";
+import { LiveNetworkStrip } from "@/components/LiveNetworkStrip";
 
 describe("UI Components", () => {
   it("renders StatusBadge correctly for confirmed and failed states", () => {
@@ -43,5 +44,31 @@ describe("UI Components", () => {
     fireEvent.click(submitBtn);
 
     expect(onSearch).toHaveBeenCalledWith("8245920");
+  });
+
+  it("renders LiveNetworkStrip with active telemetry", () => {
+    const mockStats = {
+      chain_id: "sprax-mainnet-1",
+      latest_height: 8245920,
+      latest_block_hash: "0x123",
+      total_transactions: 1000,
+      total_accounts: 50,
+      active_validators_count: 100,
+      total_bonded_tokens: "420,000,000 SPRX",
+      avg_block_time_seconds: 1.5,
+      current_tps: 1200,
+      latest_state_root: "0x456",
+    };
+
+    render(
+      <LiveNetworkStrip
+        stats={mockStats}
+        network="mainnet"
+        onNavigate={() => {}}
+      />
+    );
+
+    expect(screen.getByText(/sprax-mainnet-1/i)).toBeInTheDocument();
+    expect(screen.getByText(/1.5s/i)).toBeInTheDocument();
   });
 });

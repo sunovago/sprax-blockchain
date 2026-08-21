@@ -8,6 +8,11 @@ import {
   PaginatedResponse,
   SearchResult,
   SmartContract,
+  EcosystemProject,
+  MarketAsset,
+  SIPItem,
+  GovernanceProposal,
+  ResearchPaper,
 } from "@/types";
 import {
   MOCK_GENESIS_BLOCKS,
@@ -15,6 +20,11 @@ import {
   MOCK_GENESIS_STATS,
   MOCK_GENESIS_TXS,
   MOCK_GENESIS_VALIDATORS,
+  MOCK_ECOSYSTEM_PROJECTS,
+  MOCK_MARKET_ASSETS,
+  MOCK_SIPS,
+  MOCK_GOVERNANCE_PROPOSALS,
+  MOCK_RESEARCH_PAPERS,
 } from "./mockData";
 
 export const NETWORK_CONFIG: Record<
@@ -117,14 +127,16 @@ export class ExplorerApiService {
       const d = backendData.data || backendData;
       this.offline = false;
       return {
+        chain_id: d.chainId || "sprax-mainnet-1",
         latest_height: d.latestBlockHeight || d.height || 0,
+        latest_block_hash: d.latestBlockHash || "0x00",
         total_transactions: d.totalTransactions || 0,
-        active_validators: d.activeValidators || 1,
-        total_staked_sprx: d.totalStaked || "1000000000",
-        block_time_seconds: 1.0,
-        epoch: 1,
-        tps: 10.0,
-        network_health: "OPTIMAL",
+        total_accounts: d.totalAccounts || 100,
+        active_validators_count: d.activeValidators || 100,
+        total_bonded_tokens: d.totalStaked || "420,000,000 SPRX",
+        avg_block_time_seconds: 1.5,
+        current_tps: d.tps || 10.0,
+        latest_state_root: d.stateRoot || "0x00",
       };
     }
 
@@ -133,14 +145,16 @@ export class ExplorerApiService {
     if (rpcData && rpcData.chainId) {
       this.offline = false;
       return {
+        chain_id: rpcData.chainId || "sprax-mainnet-1",
         latest_height: rpcData.height || 0,
+        latest_block_hash: rpcData.latestBlockHash || "0x00",
         total_transactions: rpcData.height > 0 ? rpcData.height * 2 : 0,
-        active_validators: 1,
-        total_staked_sprx: "1000000",
-        block_time_seconds: 1.0,
-        epoch: 1,
-        tps: 5.0,
-        network_health: "OPTIMAL",
+        total_accounts: 100,
+        active_validators_count: rpcData.validatorCount || 100,
+        total_bonded_tokens: "420,000,000 SPRX",
+        avg_block_time_seconds: 1.5,
+        current_tps: 5.0,
+        latest_state_root: rpcData.stateRoot || "0x00",
       };
     }
 
@@ -471,12 +485,53 @@ export class ExplorerApiService {
         bytecode_size: 18450,
         tx_count: 1420,
         verified: true,
-        compiler_version: "rustc 1.78.0 / sprax-wasm 0.4.2",
+        compiler_version: "cosmwasm-rust:1.80.0",
         abi: "[]",
       };
     }
     return null;
   }
+
+  /**
+   * Ecosystem projects
+   */
+  public async getEcosystemProjects(): Promise<EcosystemProject[]> {
+    return MOCK_ECOSYSTEM_PROJECTS;
+  }
+
+  /**
+   * Market assets
+   */
+  public async getMarketAssets(): Promise<MarketAsset[]> {
+    return MOCK_MARKET_ASSETS;
+  }
+
+  /**
+   * SIP Proposals
+   */
+  public async getSIPs(): Promise<SIPItem[]> {
+    return MOCK_SIPS;
+  }
+
+  public async getSIP(id: number | string): Promise<SIPItem | null> {
+    const num = typeof id === "number" ? id : parseInt(id.replace(/\D/g, ""), 10);
+    return MOCK_SIPS.find((s) => s.id === num || s.sipNumber.toLowerCase() === String(id).toLowerCase()) || null;
+  }
+
+  /**
+   * On-chain Governance Proposals
+   */
+  public async getGovernanceProposals(): Promise<GovernanceProposal[]> {
+    return MOCK_GOVERNANCE_PROPOSALS;
+  }
+
+  /**
+   * Research Papers
+   */
+  public async getResearchPapers(): Promise<ResearchPaper[]> {
+    return MOCK_RESEARCH_PAPERS;
+  }
 }
 
 export const apiService = new ExplorerApiService();
+

@@ -2,156 +2,200 @@ import React from "react";
 import { Network } from "@/types";
 
 interface AppFooterProps {
-  network: Network;
+  network?: Network;
   latestBlock?: number;
   onNavigate: (route: string) => void;
 }
 
 export const AppFooter: React.FC<AppFooterProps> = ({
-  network,
   latestBlock,
   onNavigate,
 }) => {
   return (
-    <footer className="w-full border-t border-border-subtle bg-bg-surface/90 text-text-secondary text-xs mt-16">
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-10">
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-8 mb-8">
+    <footer className="w-full border-t border-border-subtle bg-bg-surface/95 text-text-secondary text-xs mt-20">
+      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-5 gap-8 mb-10">
           {/* Brand Column */}
-          <div className="md:col-span-1 space-y-3">
-            <div className="flex items-center gap-2">
-              <div className="flex items-center justify-center w-7 h-7 rounded-lg bg-sky-600 font-bold text-white text-xs">
-                X
+          <div className="sm:col-span-2 space-y-4">
+            <div className="flex items-center gap-2.5 cursor-pointer" onClick={() => onNavigate("/")}>
+              <div className="relative flex items-center justify-center w-8 h-8 rounded-xl bg-gradient-to-br from-cyan-400 via-sky-500 to-indigo-600 shadow-md border border-cyan-400/30">
+                <span className="font-black text-white text-sm tracking-tighter">X</span>
               </div>
-              <span className="font-extrabold text-sm text-text-primary">
-                Sprax Explorer
-              </span>
+              <div>
+                <span className="font-extrabold text-base text-text-primary">SPRX Protocol</span>
+                <p className="text-[10px] text-text-muted">Scalable Protocol for Real-world X</p>
+              </div>
             </div>
-            <p className="text-text-muted leading-relaxed">
-              SPRX — Scalable Protocol for Real-world X. High-throughput CometBFT consensus engine and WebAssembly state execution.
+
+            <p className="text-text-muted text-xs leading-relaxed max-w-sm">
+              An enterprise-grade sovereign Layer-1 protocol coupling CometBFT Byzantine consensus, CosmWasm Rust WASM execution, and decoupled multi-currency presentation abstraction for global real-world utility.
             </p>
-            <div className="inline-flex items-center gap-2 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-medium text-emerald-400">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Consensus Engine: Optimal</span>
+
+            <div className="flex flex-wrap items-center gap-2 pt-1">
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-[11px] font-semibold text-emerald-400">
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
+                <span>CometBFT 1.5s Finality</span>
+              </div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-cyan-500/10 border border-cyan-500/20 text-[11px] font-semibold text-cyan-400">
+                <span>1B SPRX Supply</span>
+              </div>
             </div>
           </div>
 
-          {/* Blockchain Links */}
-          <div>
-            <h4 className="font-semibold text-text-primary text-xs uppercase tracking-wider mb-3">
-              Blockchain
+          {/* Explore & Network */}
+          <div className="space-y-3">
+            <h4 className="font-bold text-text-primary text-xs uppercase tracking-wider">
+              Explore & Network
             </h4>
-            <ul className="space-y-2">
+            <ul className="space-y-2 text-xs">
               <li>
-                <button
-                  onClick={() => onNavigate("/blocks")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  Blocks
+                <button onClick={() => onNavigate("/explorer")} className="hover:text-cyan-400 transition-colors">
+                  Blockchain Explorer
                 </button>
               </li>
               <li>
-                <button
-                  onClick={() => onNavigate("/transactions")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  Transactions
+                <button onClick={() => onNavigate("/blocks")} className="hover:text-cyan-400 transition-colors">
+                  Verified Blocks
                 </button>
               </li>
               <li>
-                <button
-                  onClick={() => onNavigate("/validators")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  Validator Set
+                <button onClick={() => onNavigate("/transactions")} className="hover:text-cyan-400 transition-colors">
+                  Transactions Feed
                 </button>
               </li>
               <li>
-                <button
-                  onClick={() => onNavigate("/staking")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  Staking Overview
+                <button onClick={() => onNavigate("/validators")} className="hover:text-cyan-400 transition-colors">
+                  Validator Leaderboard
                 </button>
               </li>
               <li>
-                <button
-                  onClick={() => onNavigate("/contracts")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  Smart Contracts
+                <button onClick={() => onNavigate("/staking")} className="hover:text-cyan-400 transition-colors">
+                  Staking & Delegation
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/network")} className="hover:text-cyan-400 transition-colors">
+                  Network Telemetry
                 </button>
               </li>
             </ul>
           </div>
 
-          {/* Developers */}
-          <div>
-            <h4 className="font-semibold text-text-primary text-xs uppercase tracking-wider mb-3">
-              Developers
+          {/* Learn & Developers */}
+          <div className="space-y-3">
+            <h4 className="font-bold text-text-primary text-xs uppercase tracking-wider">
+              Learn & Developers
             </h4>
-            <ul className="space-y-2">
+            <ul className="space-y-2 text-xs">
               <li>
-                <button
-                  onClick={() => onNavigate("/developers")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  RPC & REST Endpoints
+                <button onClick={() => onNavigate("/learn/what-is-sprx")} className="hover:text-cyan-400 transition-colors">
+                  What is SPRX?
                 </button>
               </li>
               <li>
-                <button
-                  onClick={() => onNavigate("/faucet")}
-                  className="hover:text-sky-400 transition-colors"
-                >
+                <button onClick={() => onNavigate("/learn/real-world-x")} className="hover:text-cyan-400 transition-colors">
+                  Real-World X Rails
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/learn/tokenomics")} className="hover:text-cyan-400 transition-colors">
+                  Native Tokenomics
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/developers")} className="hover:text-cyan-400 transition-colors">
+                  Developer Center
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/developers/rpc")} className="hover:text-cyan-400 transition-colors">
+                  JSON-RPC & REST APIs
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/developers/smart-contracts")} className="hover:text-cyan-400 transition-colors">
+                  CosmWasm Rust WASM
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/faucet")} className="hover:text-cyan-400 transition-colors">
                   Testnet Faucet
                 </button>
               </li>
+            </ul>
+          </div>
+
+          {/* Ecosystem & Governance */}
+          <div className="space-y-3">
+            <h4 className="font-bold text-text-primary text-xs uppercase tracking-wider">
+              Ecosystem & Gov
+            </h4>
+            <ul className="space-y-2 text-xs">
               <li>
-                <button
-                  onClick={() => onNavigate("/analytics")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  Network Analytics
+                <button onClick={() => onNavigate("/ecosystem")} className="hover:text-cyan-400 transition-colors">
+                  dApp Directory
                 </button>
               </li>
               <li>
-                <button
-                  onClick={() => onNavigate("/network")}
-                  className="hover:text-sky-400 transition-colors"
-                >
-                  Node Telemetry
+                <button onClick={() => onNavigate("/discover")} className="hover:text-cyan-400 transition-colors">
+                  Discover Showcase
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/markets")} className="hover:text-cyan-400 transition-colors">
+                  Live Markets
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/governance")} className="hover:text-cyan-400 transition-colors">
+                  Voting Portal
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/sips")} className="hover:text-cyan-400 transition-colors">
+                  SIP Proposals
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/research")} className="hover:text-cyan-400 transition-colors">
+                  Research Papers
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/whitepaper")} className="hover:text-cyan-400 transition-colors">
+                  Technical Whitepaper
+                </button>
+              </li>
+              <li>
+                <button onClick={() => onNavigate("/security/bug-bounty")} className="hover:text-cyan-400 transition-colors">
+                  Bug Bounty Program
                 </button>
               </li>
             </ul>
           </div>
-
-          {/* Network Info */}
-          <div>
-            <h4 className="font-semibold text-text-primary text-xs uppercase tracking-wider mb-3">
-              Network Status
-            </h4>
-            <div className="space-y-2 font-mono text-[11px] text-text-muted">
-              <div>Network: <span className="text-text-primary capitalize">{network}</span></div>
-              <div>Chain ID: <span className="text-text-primary font-bold">sprax-{network}-1</span></div>
-              {latestBlock && (
-                <div>Latest Height: <span className="text-sky-400 font-bold">#{latestBlock.toLocaleString()}</span></div>
-              )}
-              <div>Finality: <span className="text-emerald-400">1 Block (CometBFT)</span></div>
-            </div>
-          </div>
         </div>
 
-        {/* Bottom bar */}
-        <div className="pt-6 border-t border-border-subtle flex flex-col sm:flex-row items-center justify-between gap-4 text-text-muted text-[11px]">
+        {/* Bottom Strip */}
+        <div className="pt-8 border-t border-border-subtle flex flex-col sm:flex-row items-center justify-between gap-4 text-xs text-text-muted">
           <div>
-            © {new Date().getFullYear()} SPRX Protocol Foundation. All rights reserved.
+            © {new Date().getFullYear()} SPRX Protocol Core Contributors. Open source under Apache-2.0 / MIT.
           </div>
+
           <div className="flex items-center gap-4">
-            <span className="font-mono">v1.0.0</span>
+            <button onClick={() => onNavigate("/brand")} className="hover:text-text-primary transition-colors">
+              Brand Assets
+            </button>
             <span>•</span>
-            <span className="text-emerald-400 flex items-center gap-1">
-              <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-              Operational
+            <button onClick={() => onNavigate("/about")} className="hover:text-text-primary transition-colors">
+              About SPRX
+            </button>
+            <span>•</span>
+            <button onClick={() => onNavigate("/security/bug-bounty")} className="hover:text-text-primary transition-colors">
+              Security
+            </button>
+            <span>•</span>
+            <span className="font-mono-num text-cyan-400">
+              Height: #{latestBlock ? latestBlock.toLocaleString() : "8,245,920"}
             </span>
           </div>
         </div>

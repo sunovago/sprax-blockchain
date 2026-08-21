@@ -135,3 +135,76 @@ export interface CurrencyRate {
   prefix: string;
   ratePerSprx: number;
 }
+
+export interface EcosystemProject {
+  id: string;
+  name: string;
+  tagline: string;
+  description: string;
+  category: "DeFi" | "RWA & Payments" | "Wallets" | "Infrastructure" | "Enterprise" | "Gaming & Identity";
+  stage: "Mainnet" | "Testnet" | "In Development";
+  verified: boolean;
+  website: string;
+  github?: string;
+  metrics?: { label: string; value: string };
+}
+
+export interface MarketAsset {
+  id: string;
+  symbol: string;
+  name: string;
+  priceUsd: number;
+  change24h: number;
+  high24h: number;
+  low24h: number;
+  volume24hUsd: number;
+  marketCapUsd: number;
+  circulatingSupply: string;
+  sparkline: number[];
+  category: "Native" | "Stable Asset" | "DeFi" | "RWA";
+}
+
+export interface SIPItem {
+  id: number;
+  sipNumber: string;
+  title: string;
+  author: string;
+  status: "Draft" | "Review" | "Accepted" | "Final" | "Rejected";
+  category: "Core" | "Networking" | "Execution" | "Standards" | "Meta" | "Consensus";
+  createdDate: string;
+  summary: string;
+  motivation: string;
+  specification: string;
+  rationale: string;
+}
+
+export interface GovernanceProposal {
+  id: number;
+  title: string;
+  description: string;
+  proposer: string;
+  status: "Voting" | "Deposit" | "Passed" | "Rejected" | "Executed";
+  category: "ParameterChange" | "CommunityPoolSpend" | "SoftwareUpgrade" | "TextProposal";
+  totalDeposit: string;
+  minDepositRequired: string;
+  votingEndTime: string;
+  votes: {
+    yes: number;
+    no: number;
+    noWithVeto: number;
+    abstain: number;
+  };
+  quorumMet: boolean;
+  timelockDelayHours?: number;
+}
+
+export interface ResearchPaper {
+  id: string;
+  title: string;
+  authors: string[];
+  date: string;
+  abstract: string;
+  category: "Consensus" | "Cryptography" | "RWA Legal Rails" | "State Storage" | "MEV Defense";
+  downloadUrl?: string;
+  readingMinutes: number;
+}

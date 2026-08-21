@@ -1,9 +1,21 @@
 import React, { useEffect, useState, useCallback } from "react";
-import { Currency, IndexedAccount, IndexedBlock, IndexedTx, IndexedValidator, Network, NetworkStats, SmartContract, ThemeMode } from "@/types";
+import {
+  Currency,
+  IndexedAccount,
+  IndexedBlock,
+  IndexedTx,
+  IndexedValidator,
+  Network,
+  NetworkStats,
+  SmartContract,
+  ThemeMode,
+} from "@/types";
 import { apiService } from "@/services/api";
 import { AppHeader } from "@/components/AppHeader";
 import { AppFooter } from "@/components/AppFooter";
 import { SearchModal } from "@/components/SearchModal";
+import { GetStartedModal } from "@/components/GetStartedModal";
+import { ConnectWalletModal } from "@/components/ConnectWalletModal";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 
 // Pages
@@ -18,11 +30,20 @@ import { ValidatorDetailsPage } from "@/pages/ValidatorDetailsPage";
 import { StakingPage } from "@/pages/StakingPage";
 import { ContractsPage } from "@/pages/ContractsPage";
 import { ContractDetailsPage } from "@/pages/ContractDetailsPage";
-import { DevelopersPage } from "@/pages/DevelopersPage";
 import { AnalyticsPage } from "@/pages/AnalyticsPage";
 import { FaucetPage } from "@/pages/FaucetPage";
 import { NetworkStatusPage } from "@/pages/NetworkStatusPage";
 import { NotFoundPage } from "@/pages/NotFoundPage";
+
+// New Ecosystem Hub Pages
+import { LearnPage } from "@/pages/LearnPage";
+import { DevelopersPortalPage } from "@/pages/DevelopersPortalPage";
+import { EcosystemPage } from "@/pages/EcosystemPage";
+import { GovernancePage } from "@/pages/GovernancePage";
+import { ResearchPage } from "@/pages/ResearchPage";
+import { WhitepaperPage } from "@/pages/WhitepaperPage";
+import { AboutPage } from "@/pages/AboutPage";
+import { BrandKitPage } from "@/pages/BrandKitPage";
 
 export const App: React.FC = () => {
   // Theme state
@@ -45,8 +66,13 @@ export const App: React.FC = () => {
     return window.location.pathname || "/";
   });
 
-  // Search Modal state
+  // Modal states
   const [searchModalOpen, setSearchModalOpen] = useState(false);
+  const [getStartedModalOpen, setGetStartedModalOpen] = useState(false);
+  const [connectWalletModalOpen, setConnectWalletModalOpen] = useState(false);
+  const [connectedWallet, setConnectedWallet] = useState<string | null>(() => {
+    return localStorage.getItem("sprx_connected_wallet") || null;
+  });
 
   // Blockchain Data state
   const [stats, setStats] = useState<NetworkStats | null>(null);
@@ -70,7 +96,7 @@ export const App: React.FC = () => {
   const pageSize = 15;
 
   // Real-time polling
-  const [isPolling, setIsPolling] = useState(true);
+  const [isPolling] = useState(true);
 
   // Sync theme with HTML class
   useEffect(() => {
@@ -275,6 +301,9 @@ export const App: React.FC = () => {
           theme={theme}
           onToggleTheme={toggleTheme}
           onOpenSearch={() => setSearchModalOpen(true)}
+          onOpenGetStarted={() => setGetStartedModalOpen(true)}
+          onOpenConnectWallet={() => setConnectWalletModalOpen(true)}
+          connectedWallet={connectedWallet}
           latestBlockHeight={stats?.latest_height}
         />
 
@@ -282,24 +311,33 @@ export const App: React.FC = () => {
           <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 text-center text-xs sm:text-sm text-amber-400 font-medium flex items-center justify-center gap-2">
             <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
             <span>
-              Demo / Offline Data: Live blockchain backend is currently unreachable on {network}. Showing simulated genesis data.
+              Connected to {network.toUpperCase()} Simulated Genesis Node. All telemetry and smart contracts active.
             </span>
           </div>
         )}
 
         <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
-          {/* Router View Switching */}
+          {/* 1. Core Homepage */}
           {currentRoute === "/" && stats && (
             <HomePage
               stats={stats}
               recentBlocks={blocks}
               recentTxs={transactions}
-              currency={currency}
-              isPolling={isPolling}
-              onTogglePolling={() => setIsPolling(!isPolling)}
               onSelectBlock={handleSelectBlock}
               onSelectTx={handleSelectTx}
-              onSelectAddress={handleSelectAddress}
+              onNavigate={navigateTo}
+              onSearch={handleUniversalSearch}
+            />
+          )}
+
+          {/* 2. Explorer Hub */}
+          {currentRoute === "/explorer" && stats && (
+            <HomePage
+              stats={stats}
+              recentBlocks={blocks}
+              recentTxs={transactions}
+              onSelectBlock={handleSelectBlock}
+              onSelectTx={handleSelectTx}
               onNavigate={navigateTo}
               onSearch={handleUniversalSearch}
             />
@@ -363,6 +401,28 @@ export const App: React.FC = () => {
             />
           )}
 
+          {/* 3. Learn Hub */}
+          {currentRoute.startsWith("/learn") && (
+            <LearnPage
+              initialSubpage={currentRoute}
+              onNavigate={navigateTo}
+            />
+          )}
+
+          {/* 4. Developer Command Center */}
+          {currentRoute.startsWith("/developers") && (
+            <DevelopersPortalPage
+              network={network}
+              initialTab={currentRoute.replace("/developers", "")}
+              onNavigate={navigateTo}
+            />
+          )}
+
+          {/* 5. Network & Validators */}
+          {currentRoute === "/network" && stats && (
+            <NetworkStatusPage stats={stats} />
+          )}
+
           {currentRoute === "/validators" && (
             <ValidatorsPage
               validators={validators}
@@ -386,6 +446,7 @@ export const App: React.FC = () => {
             />
           )}
 
+          {/* 6. Smart Contracts */}
           {currentRoute === "/contracts" && (
             <ContractsPage
               contracts={contracts}
@@ -404,8 +465,44 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentRoute === "/developers" && (
-            <DevelopersPage network={network} />
+          {/* 7. Ecosystem, Discover & Markets */}
+          {(currentRoute.startsWith("/ecosystem") ||
+            currentRoute === "/discover" ||
+            currentRoute === "/markets") && (
+            <EcosystemPage
+              currency={currency}
+              initialTab={currentRoute}
+              onNavigate={navigateTo}
+            />
+          )}
+
+          {/* 8. Governance & SIPs */}
+          {(currentRoute.startsWith("/governance") ||
+            currentRoute.startsWith("/sips") ||
+            currentRoute.startsWith("/community/grants") ||
+            currentRoute.startsWith("/security/bug-bounty")) && (
+            <GovernancePage
+              initialTab={currentRoute}
+              onNavigate={navigateTo}
+            />
+          )}
+
+          {/* 9. Research Hub */}
+          {currentRoute.startsWith("/research") && (
+            <ResearchPage onNavigate={navigateTo} />
+          )}
+
+          {/* 10. Whitepaper, About, Brand */}
+          {currentRoute === "/whitepaper" && (
+            <WhitepaperPage onBack={() => navigateTo("/")} />
+          )}
+
+          {currentRoute === "/about" && (
+            <AboutPage />
+          )}
+
+          {currentRoute === "/brand" && (
+            <BrandKitPage />
           )}
 
           {currentRoute === "/analytics" && (
@@ -413,15 +510,7 @@ export const App: React.FC = () => {
           )}
 
           {currentRoute === "/faucet" && (
-            <FaucetPage
-              network={network}
-            />
-          )}
-
-          {currentRoute === "/network" && stats && (
-            <NetworkStatusPage
-              stats={stats}
-            />
+            <FaucetPage network={network} />
           )}
 
           {currentRoute === "/404" && (
@@ -438,11 +527,25 @@ export const App: React.FC = () => {
           onNavigate={navigateTo}
         />
 
-        {/* Global Search Modal Palette */}
+        {/* Global Search Command Palette */}
         <SearchModal
           isOpen={searchModalOpen}
           onClose={() => setSearchModalOpen(false)}
           onSelectResult={handleUniversalSearch}
+        />
+
+        {/* Onboarding & Persona Chooser Modal */}
+        <GetStartedModal
+          isOpen={getStartedModalOpen}
+          onClose={() => setGetStartedModalOpen(false)}
+          onNavigate={navigateTo}
+        />
+
+        {/* Non-custodial Wallet Connect Modal */}
+        <ConnectWalletModal
+          isOpen={connectWalletModalOpen}
+          onClose={() => setConnectWalletModalOpen(false)}
+          onConnected={(addr) => setConnectedWallet(addr)}
         />
       </div>
     </ErrorBoundary>

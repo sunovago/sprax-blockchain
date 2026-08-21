@@ -10,6 +10,7 @@ interface MetricCardProps {
   isPositive?: boolean;
   className?: string;
   valueColor?: string;
+  onClick?: () => void;
 }
 
 export const MetricCard: React.FC<MetricCardProps> = ({
@@ -21,10 +22,14 @@ export const MetricCard: React.FC<MetricCardProps> = ({
   isPositive,
   className = "",
   valueColor,
+  onClick,
 }) => {
   return (
     <div
-      className={`relative overflow-hidden rounded-xl border border-border-subtle bg-bg-surface p-4 sm:p-5 transition-all duration-200 hover:border-border-strong hover:shadow-card ${className}`}
+      onClick={onClick}
+      className={`relative overflow-hidden rounded-xl border border-border-subtle bg-bg-surface p-4 sm:p-5 transition-all duration-200 hover:border-border-strong hover:shadow-card ${
+        onClick ? "cursor-pointer" : ""
+      } ${className}`}
     >
       <div className="flex items-center justify-between gap-2 mb-2">
         <span className="text-xs font-semibold uppercase tracking-wider text-text-secondary">
