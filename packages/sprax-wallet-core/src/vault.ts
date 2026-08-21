@@ -50,12 +50,14 @@ export class WalletVault {
     }
 
     // Derive 256-bit encryption key
-    const derivedKey = pbkdf2(
+    const derivedKeyArray = pbkdf2(
       sha256,
       new TextEncoder().encode(password),
       salt,
       { c: this.DEFAULT_ITERATIONS, dkLen: 32 }
     );
+    // Convert to standard ArrayBuffer to satisfy Web Crypto API type constraints
+    const derivedKey = derivedKeyArray.slice().buffer;
 
     // Derive initial accounts to cache in vault metadata (without private keys)
     const wallet = HDWallet.fromMnemonic(mnemonic);
@@ -107,12 +109,14 @@ export class WalletVault {
     const iv = this.hexToBytes(vault.ivHex);
     const cipherBytes = this.hexToBytes(vault.cipherTextHex);
 
-    const derivedKey = pbkdf2(
+    const derivedKeyArray = pbkdf2(
       sha256,
       new TextEncoder().encode(password),
       salt,
       { c: vault.kdfIterations, dkLen: 32 }
     );
+    // Convert to standard ArrayBuffer to satisfy Web Crypto API type constraints
+    const derivedKey = derivedKeyArray.slice().buffer;
 
     let decryptedBytes: Uint8Array;
 
