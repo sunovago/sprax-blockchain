@@ -75,6 +75,24 @@ impl JsonRpcResponse {
 #[derive(Debug)]
 pub struct RpcServer;
 
+#[derive(Debug)]
+pub struct RpcServerHandle {
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl RpcServerHandle {
+    pub async fn stop(mut self) {
+        let _ = self.shutdown.send(());
+        if tokio::time::timeout(std::time::Duration::from_secs(5), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = self.task.await;
+        }
+    }
+}
+
 impl RpcServer {
     fn router(node: NodeService) -> Router {
         let state = Arc::new(RpcServerState { node });
@@ -105,7 +123,7 @@ impl RpcServer {
             .with_state(state)
     }
 
-    pub async fn start(node: NodeService, port: u16) -> Result<(), NodeError> {
+    pub async fn start(node: NodeService, port: u16) -> Result<RpcServerHandle, NodeError> {
         let app = Self::router(node);
 
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
@@ -115,13 +133,19 @@ impl RpcServer {
 
         info!("SPRX JSON-RPC & REST HTTP Server listening on http://0.0.0.0:{port}");
 
-        tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+            {
                 error!("RPC server error: {e}");
             }
         });
 
-        Ok(())
+        Ok(RpcServerHandle { shutdown, task })
     }
 }
 

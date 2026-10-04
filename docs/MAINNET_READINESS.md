@@ -49,6 +49,9 @@ Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 
   leaves signing disabled until operator configuration. CLI port overrides affect listeners.
   Containers quote argument arrays and require explicit non-development initialization;
   the daemon handles both SIGINT and SIGTERM for shutdown.
+- Node startup reports P2P/RPC bind failures instead of reporting an online service. RPC
+  handles drain on stop, allowing listener reuse. An explicitly configured signing key must
+  exist and match an active validator; the selected home governs the journal path after moves.
 - The browser wallet persists only an encrypted vault, supports unlock and encrypted backups,
   and locks on tab hide or five minutes of inactivity. SDK address hashing, canonical
   transaction signing, and REST address/balance handling match the Rust node. Both Ed25519

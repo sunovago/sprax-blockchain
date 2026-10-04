@@ -41,6 +41,7 @@ pub struct NodeService {
     staking: Arc<RwLock<StakingKeeper>>,
     keyring: Arc<RwLock<Keyring>>,
     p2p: Arc<RwLock<Option<P2pService>>>,
+    rpc_server: Arc<RwLock<Option<crate::rpc_server::RpcServerHandle>>>,
     is_running: Arc<AtomicBool>,
     is_syncing: Arc<AtomicBool>,
 }
@@ -49,12 +50,15 @@ impl NodeService {
     /// Initializes or loads a node service from a home directory.
     pub fn new_or_load(home: PathBuf) -> Result<Self, NodeError> {
         let config_file = home.join("config.toml");
-        let config = if config_file.exists() {
+        let mut config = if config_file.exists() {
             NodeConfig::load_from_file(&config_file)?
         } else {
             NodeConfig::for_environment(crate::Environment::Development, home.clone())
         };
 
+        // The selected home is authoritative after moving/restoring a node directory.
+        // A stale path in TOML must never send signing state to another directory.
+        config.home_dir = home.clone();
         let keyring_dir = home.join("keyring");
         let keyring = Keyring::open_or_create_with_development_keys(
             &keyring_dir,
@@ -190,6 +194,7 @@ impl NodeService {
             staking: Arc::new(RwLock::new(staking)),
             keyring: Arc::new(RwLock::new(keyring)),
             p2p: Arc::new(RwLock::new(None)),
+            rpc_server: Arc::new(RwLock::new(None)),
             is_running: Arc::new(AtomicBool::new(false)),
             is_syncing: Arc::new(AtomicBool::new(false)),
         })
@@ -432,12 +437,38 @@ impl NodeService {
 
     /// Starts the background node service and P2P networking layer.
     pub async fn start(&self) -> Result<(), NodeError> {
-        let local_validator_key = self
-            .config
-            .consensus
-            .local_validator_key_name
-            .as_ref()
-            .and_then(|name| self.keyring.read().get_ed25519_keypair(name).ok());
+        if self.is_running() {
+            return Err(NodeError::RuntimeError("node is already running".into()));
+        }
+        let local_validator_key = if self.config.consensus.enabled {
+            self.config
+                .consensus
+                .local_validator_key_name
+                .as_ref()
+                .map(|name| self.keyring.read().get_ed25519_keypair(name))
+                .transpose()?
+        } else {
+            None
+        };
+        let initial_val_set = if let Some(key) = &local_validator_key {
+            let validators = self
+                .staking
+                .read()
+                .get_active_validator_set()
+                .map_err(|e| NodeError::ConfigError(format!("cannot start validator: {e}")))?;
+            if !validators
+                .validators()
+                .iter()
+                .any(|v| v.address == key.address() && v.public_key == key.public_key_bytes())
+            {
+                return Err(NodeError::ConfigError(
+                    "configured signing key is not an active validator".into(),
+                ));
+            }
+            Some(validators)
+        } else {
+            None
+        };
 
         let signing_journal = if self.config.consensus.enabled {
             local_validator_key
@@ -503,7 +534,12 @@ impl NodeService {
         let latest_hash = Hasher::block_hash(&header).unwrap_or(Hash32::ZERO);
 
         // Start P2P listener & bootstrap dialing
-        let _ = p2p_service.start(header.height, latest_hash).await;
+        if let Err(error) = p2p_service.start(header.height, latest_hash).await {
+            self.is_running.store(false, Ordering::SeqCst);
+            return Err(NodeError::RuntimeError(format!(
+                "failed to start P2P: {error}"
+            )));
+        }
         *self.p2p.write() = Some(p2p_service.clone());
 
         info!(
@@ -553,15 +589,9 @@ impl NodeService {
 
         if self.config.consensus.enabled {
             if let Some(val_key) = local_validator_key {
-                let val_set = self
-                    .staking
-                    .read()
-                    .get_active_validator_set()
-                    .map_err(|e| {
-                        NodeError::ConfigError(format!(
-                            "cannot start consensus driver: no active validator set: {e}"
-                        ))
-                    })?;
+                let val_set = initial_val_set.ok_or_else(|| {
+                    NodeError::ConfigError("missing initial validator set".into())
+                })?;
                 let engine = sprax_consensus::BftConsensusEngine::new(self.height() + 1, val_set);
                 let driver = ConsensusDriver::new(
                     engine,
@@ -609,8 +639,12 @@ impl NodeService {
 
         if self.config.rpc.enable_json_rpc {
             let rpc_port = self.config.rpc.json_rpc_port;
-            if let Err(e) = crate::rpc_server::RpcServer::start(self.clone(), rpc_port).await {
-                warn!("failed to start JSON-RPC server on port {rpc_port}: {e}");
+            match crate::rpc_server::RpcServer::start(self.clone(), rpc_port).await {
+                Ok(handle) => *self.rpc_server.write() = Some(handle),
+                Err(error) => {
+                    self.stop().await?;
+                    return Err(error);
+                }
             }
         }
 
@@ -627,6 +661,10 @@ impl NodeService {
             p2p.stop();
         }
 
+        let rpc_handle = self.rpc_server.write().take();
+        if let Some(handle) = rpc_handle {
+            handle.stop().await;
+        }
         info!("SPRX Local Node Service stopped cleanly");
         Ok(())
     }
@@ -663,6 +701,25 @@ mod tests {
                 tokio::time::sleep(std::time::Duration::from_millis(10)).await;
             }
         }
+        service.stop().await.unwrap();
+        let rebound_rpc = tokio::net::TcpListener::bind(("127.0.0.1", rpc))
+            .await
+            .unwrap();
+        drop(rebound_rpc);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            match tokio::net::TcpListener::bind(("127.0.0.1", p2p)).await {
+                Ok(listener) => {
+                    drop(listener);
+                    break;
+                }
+                Err(_) => {
+                    assert!(tokio::time::Instant::now() < deadline);
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+        }
+        service.start().await.unwrap();
         service.stop().await.unwrap();
     }
 
