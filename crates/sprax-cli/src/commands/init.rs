@@ -166,4 +166,40 @@ mod tests {
         assert!(!a.home.exists());
         std::fs::remove_file(input).unwrap();
     }
+    #[test]
+    fn explicit_mainnet_genesis_initializes_an_empty_non_signing_keyring() {
+        let mut a = args("mainnet");
+        let input = a.home.with_extension("genesis.json");
+        let key = Ed25519Keypair::from_seed(&[42; 32]);
+        let mut genesis = development_genesis().unwrap();
+        genesis.chain_id = "sprax-mainnet-1".into();
+        genesis.accounts = vec![GenesisAccount {
+            name: "operator".into(),
+            address: key.address(),
+            initial_balance: Amount::from_sprx_whole(1_000_000).unwrap(),
+        }];
+        genesis.validators[0].operator_address = key.address();
+        genesis.validators[0].consensus_pubkey = key.public_key_bytes().to_vec();
+        genesis.save_to_file(&input).unwrap();
+        a.genesis = Some(input.clone());
+        execute(&a).unwrap();
+        let config = NodeConfig::load_from_file(&a.home.join("config.toml")).unwrap();
+        assert_eq!(config.environment, Environment::Mainnet);
+        assert_eq!(config.chain_id, genesis.chain_id);
+        assert!(!config.consensus.enabled);
+        assert!(config.consensus.local_validator_key_name.is_none());
+        assert!(
+            Keyring::open_or_create_with_development_keys(&a.home.join("keyring"), false)
+                .unwrap()
+                .list()
+                .is_empty()
+        );
+        let stored = GenesisConfig::load_from_file(&a.home.join("genesis.json")).unwrap();
+        assert_eq!(
+            serde_json::to_vec(&stored).unwrap(),
+            serde_json::to_vec(&genesis).unwrap()
+        );
+        std::fs::remove_dir_all(a.home).unwrap();
+        std::fs::remove_file(input).unwrap();
+    }
 }

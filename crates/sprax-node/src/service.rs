@@ -724,6 +724,36 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn rpc_bind_failure_rolls_back_startup_and_allows_retry() {
+        let temp = tempfile::tempdir().unwrap();
+        let occupied = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let rpc = occupied.local_addr().unwrap().port();
+        let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let p2p = reserved.local_addr().unwrap().port();
+        drop(reserved);
+        let mut service = NodeService::new_or_load(temp.path().to_path_buf()).unwrap();
+        service.override_listen_ports(Some(p2p), Some(rpc));
+        assert!(service.start().await.is_err());
+        assert!(!service.is_running());
+        drop(occupied);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            match tokio::net::TcpListener::bind(("127.0.0.1", p2p)).await {
+                Ok(listener) => {
+                    drop(listener);
+                    break;
+                }
+                Err(_) => {
+                    assert!(tokio::time::Instant::now() < deadline);
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            }
+        }
+        service.start().await.unwrap();
+        service.stop().await.unwrap();
+    }
+
+    #[tokio::test]
     async fn test_node_service_lifecycle() {
         let temp_dir = tempfile::tempdir().unwrap();
         let service = NodeService::new_or_load(temp_dir.path().to_path_buf()).unwrap();
