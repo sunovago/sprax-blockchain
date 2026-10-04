@@ -1,6 +1,6 @@
 use crate::peer::PeerId;
 use serde::{Deserialize, Serialize};
-use sprax_consensus::{EquivocationEvidence, Vote};
+use sprax_consensus::{EquivocationEvidence, SignedProposal, Vote};
 use sprax_types::{Block, Hash32, Transaction};
 
 /// Canonical P2P Network Protocol Messages.
@@ -38,11 +38,7 @@ pub enum NetworkMessage {
     /// Response containing active peer network addresses.
     PeerDiscoveryResponse { peers: Vec<String> },
     /// Block proposal broadcast by the round's selected proposer.
-    Proposal {
-        height: u64,
-        round: u32,
-        block: Block,
-    },
+    Proposal(SignedProposal),
     /// A signed BFT prevote or precommit attestation.
     Vote(Vote),
     /// Double-sign (equivocation) evidence, gossiped so every honest node can slash locally.

@@ -1,6 +1,7 @@
 import * as ed25519 from "@noble/curves/ed25519";
 import * as secp256k1 from "@noble/curves/secp256k1";
 import { sha256 } from "@noble/hashes/sha256";
+import { blake3 } from "@noble/hashes/blake3";
 import { AddressUtil } from "./address";
 import { KeyAlgorithm, SendTxRequest, SignedTransaction, TxFee } from "./types";
 
@@ -119,6 +120,12 @@ export class TransactionBuilder {
     let publicKeyHex = "";
 
     if (algorithm !== KeyAlgorithm.Ed25519 && algorithm !== KeyAlgorithm.Secp256k1) throw new Error("Unsupported signing algorithm");
+    const signerPublicKey = algorithm === KeyAlgorithm.Ed25519
+      ? ed25519.ed25519.getPublicKey(privateKey) : secp256k1.secp256k1.getPublicKey(privateKey, true);
+    const signerAddress = AddressUtil.toHex(blake3(signerPublicKey).slice(0, 20));
+    if (signerAddress !== AddressUtil.toHex(AddressUtil.parseToBytes(req.fromAddress))) {
+      throw new Error("Signing key does not match the sender account; unlock the wallet again");
+    }
     if (algorithm === KeyAlgorithm.Ed25519) {
       const pubKey = ed25519.ed25519.getPublicKey(privateKey);
       const sig = ed25519.ed25519.sign(signBytes, privateKey);

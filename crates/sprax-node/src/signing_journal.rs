@@ -1,7 +1,7 @@
 //! Persist votes before releasing signatures. Keep this database with validator keys.
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
-use sprax_consensus::{Vote, VoteType};
+use sprax_consensus::{SignedProposal, Vote, VoteType};
 use sprax_crypto::Ed25519Keypair;
 use sprax_types::Hash32;
 use std::{io::Write, path::Path, sync::Arc};
@@ -25,6 +25,7 @@ pub struct SigningState {
 pub struct SigningJournal {
     db: Arc<Database>,
     public_key: Vec<u8>,
+    genesis: Hash32,
 }
 
 impl SigningJournal {
@@ -84,6 +85,7 @@ impl SigningJournal {
         Ok(Self {
             db: Arc::new(db),
             public_key: identity.public_key,
+            genesis,
         })
     }
 
@@ -96,6 +98,71 @@ impl SigningJournal {
             .map(|v| serde_json::from_slice(v.value()).map_err(|e| e.to_string()))
             .transpose();
         result
+    }
+
+    /// Proposal signatures have a separate durable sequence from prevotes/precommits.
+    pub fn sign_proposal(
+        &self,
+        mut proposal: SignedProposal,
+        signer: &Ed25519Keypair,
+    ) -> Result<SignedProposal, String> {
+        if proposal.genesis != self.genesis
+            || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
+            || proposal.block.header.proposer != signer.address()
+        {
+            return Err("proposal signer or genesis does not match journal identity".into());
+        }
+        let write = self.db.begin_write().map_err(|e| e.to_string())?;
+        {
+            let mut table = write.open_table(TABLE).map_err(|e| e.to_string())?;
+            let previous: Option<SignedProposal> = table
+                .get("proposal")
+                .map_err(|e| e.to_string())?
+                .map(|value| serde_json::from_slice(value.value()).map_err(|e| e.to_string()))
+                .transpose()?;
+            let position =
+                |proposal: &SignedProposal| (proposal.block.header.height, proposal.round);
+            if let Some(previous) = previous {
+                if position(&proposal) < position(&previous) {
+                    return Err("refusing proposal signing regression".into());
+                }
+                if position(&proposal) == position(&previous) {
+                    if proposal.sign_bytes().map_err(|e| e.to_string())?
+                        != previous.sign_bytes().map_err(|e| e.to_string())?
+                    {
+                        return Err("refusing conflicting proposal at the same height/round".into());
+                    }
+                    return Ok(previous);
+                }
+            }
+            let state: Option<SigningState> = table
+                .get("state")
+                .map_err(|e| e.to_string())?
+                .map(|value| serde_json::from_slice(value.value()).map_err(|e| e.to_string()))
+                .transpose()?;
+            if let Some(state) = state {
+                if position(&proposal) < (state.vote.height, state.vote.round) {
+                    return Err("proposal predates signed vote".into());
+                }
+                if proposal.block.header.height == state.vote.height
+                    && state.locked_block.is_some()
+                    && state.locked_block
+                        != Some(
+                            sprax_crypto::Hasher::block_hash(&proposal.block.header)
+                                .map_err(|e| e.to_string())?,
+                        )
+                {
+                    return Err("proposal conflicts with durable lock".into());
+                }
+            }
+            proposal.signature = signer.sign(&proposal.sign_bytes().map_err(|e| e.to_string())?);
+            let bytes = serde_json::to_vec(&proposal).map_err(|e| e.to_string())?;
+            table
+                .insert("proposal", bytes.as_slice())
+                .map_err(|e| e.to_string())?;
+        }
+        write.commit().map_err(|e| e.to_string())?;
+        Ok(proposal)
     }
 
     /// Database write transactions serialize competing callers; a signature is returned

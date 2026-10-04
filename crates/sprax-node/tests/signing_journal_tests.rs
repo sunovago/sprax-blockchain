@@ -1,4 +1,45 @@
+use sprax_consensus::SignedProposal;
 use sprax_consensus::{Vote, VoteType};
+use sprax_types::{Block, BlockBody, BlockHeader};
+
+#[test]
+fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("proposal-signing.redb");
+    let signer = Ed25519Keypair::generate();
+    let genesis = Hash32::new([61; 32]);
+    let mut header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([62; 32]));
+    header.proposer = signer.address();
+    header.height = 1;
+    header.parent_hash = Hash32::new([63; 32]);
+    let proposal = SignedProposal {
+        genesis,
+        round: 2,
+        block: Block {
+            header,
+            body: BlockBody::default(),
+            last_commit: vec![],
+        },
+        signature: Vec::new(),
+    };
+    let journal = SigningJournal::open(&path, genesis, &signer).unwrap();
+    let signed = journal.sign_proposal(proposal.clone(), &signer).unwrap();
+    drop(journal);
+    let reopened = SigningJournal::open(&path, genesis, &signer).unwrap();
+    assert_eq!(
+        reopened.sign_proposal(proposal.clone(), &signer).unwrap(),
+        signed
+    );
+    let mut conflict = proposal.clone();
+    conflict.block.header.state_root = Hash32::ZERO;
+    assert!(reopened.sign_proposal(conflict, &signer).is_err());
+    let mut old = proposal.clone();
+    old.round = 1;
+    assert!(reopened.sign_proposal(old, &signer).is_err());
+    let mut wrong_genesis = proposal;
+    wrong_genesis.genesis = Hash32::ZERO;
+    assert!(reopened.sign_proposal(wrong_genesis, &signer).is_err());
+}
 use sprax_crypto::Ed25519Keypair;
 use sprax_node::signing_journal::SigningJournal;
 use sprax_types::Hash32;

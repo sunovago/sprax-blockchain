@@ -5,7 +5,7 @@ use crate::{
     peer::{PeerId, PeerScore},
 };
 use parking_lot::RwLock;
-use sprax_consensus::{EquivocationEvidence, Vote};
+use sprax_consensus::{EquivocationEvidence, SignedProposal, Vote};
 use sprax_types::{Block, Hash32, Transaction};
 use std::{
     collections::{HashMap, HashSet},
@@ -56,7 +56,7 @@ pub struct P2pService {
     inbound_tx_tx: mpsc::Sender<Transaction>,
     inbound_block_tx: mpsc::Sender<Block>,
     inbound_vote_tx: mpsc::Sender<Vote>,
-    inbound_proposal_tx: mpsc::Sender<(u64, u32, Block)>,
+    inbound_proposal_tx: mpsc::Sender<SignedProposal>,
     inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
     block_fetch_fn: BlockFetchFn,
 }
@@ -80,7 +80,7 @@ impl P2pService {
         inbound_tx_tx: mpsc::Sender<Transaction>,
         inbound_block_tx: mpsc::Sender<Block>,
         inbound_vote_tx: mpsc::Sender<Vote>,
-        inbound_proposal_tx: mpsc::Sender<(u64, u32, Block)>,
+        inbound_proposal_tx: mpsc::Sender<SignedProposal>,
         inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Self {
@@ -138,13 +138,9 @@ impl P2pService {
     }
 
     /// Broadcasts a block proposal for the given (height, round) to all connected peers.
-    pub fn broadcast_proposal(&self, height: u64, round: u32, block: Block) {
+    pub fn broadcast_proposal(&self, proposal: SignedProposal) {
         let peers = self.peers.read();
-        let msg = NetworkMessage::Proposal {
-            height,
-            round,
-            block,
-        };
+        let msg = NetworkMessage::Proposal(proposal);
         for peer in peers.values() {
             let _ = peer.send(msg.clone());
         }
@@ -314,7 +310,7 @@ impl P2pService {
         inbound_tx: mpsc::Sender<Transaction>,
         inbound_block: mpsc::Sender<Block>,
         inbound_vote: mpsc::Sender<Vote>,
-        inbound_proposal: mpsc::Sender<(u64, u32, Block)>,
+        inbound_proposal: mpsc::Sender<SignedProposal>,
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Result<(), NetworkError> {
@@ -385,7 +381,7 @@ impl P2pService {
         inbound_tx: mpsc::Sender<Transaction>,
         inbound_block: mpsc::Sender<Block>,
         inbound_vote: mpsc::Sender<Vote>,
-        inbound_proposal: mpsc::Sender<(u64, u32, Block)>,
+        inbound_proposal: mpsc::Sender<SignedProposal>,
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Result<(), NetworkError> {
@@ -452,7 +448,7 @@ impl P2pService {
         inbound_tx: mpsc::Sender<Transaction>,
         inbound_block: mpsc::Sender<Block>,
         inbound_vote: mpsc::Sender<Vote>,
-        inbound_proposal: mpsc::Sender<(u64, u32, Block)>,
+        inbound_proposal: mpsc::Sender<SignedProposal>,
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Result<(), NetworkError> {
@@ -523,12 +519,8 @@ impl P2pService {
                         NetworkMessage::Vote(vote) => {
                             let _ = inbound_vote.try_send(vote);
                         }
-                        NetworkMessage::Proposal {
-                            height,
-                            round,
-                            block,
-                        } => {
-                            let _ = inbound_proposal.try_send((height, round, block));
+                        NetworkMessage::Proposal(proposal) => {
+                            let _ = inbound_proposal.try_send(proposal);
                         }
                         NetworkMessage::Evidence(evidence) => {
                             let _ = inbound_evidence.try_send(evidence);

@@ -2,7 +2,7 @@ use crate::signing_journal::SigningJournal;
 use parking_lot::RwLock;
 use sprax_consensus::{
     BftConsensusEngine, ConsensusError, ConsensusTimeoutConfig, EquivocationEvidence,
-    StakingKeeper, Vote, VoteType,
+    SignedProposal, StakingKeeper, Vote, VoteType,
 };
 use sprax_core::ChainLedger;
 use sprax_crypto::{Ed25519Keypair, Hasher};
@@ -29,7 +29,7 @@ pub struct ConsensusDriver {
     signing_journal: SigningJournal,
     timeouts: ConsensusTimeoutConfig,
     inbound_vote_rx: mpsc::Receiver<Vote>,
-    inbound_proposal_rx: mpsc::Receiver<(u64, u32, Block)>,
+    inbound_proposal_rx: mpsc::Receiver<SignedProposal>,
     is_running: Arc<AtomicBool>,
     precommitted_this_round: bool,
     pending_block: Option<Block>,
@@ -50,7 +50,7 @@ impl ConsensusDriver {
         signing_journal: SigningJournal,
         timeouts: ConsensusTimeoutConfig,
         inbound_vote_rx: mpsc::Receiver<Vote>,
-        inbound_proposal_rx: mpsc::Receiver<(u64, u32, Block)>,
+        inbound_proposal_rx: mpsc::Receiver<SignedProposal>,
         is_running: Arc<AtomicBool>,
         min_peers_before_start: usize,
     ) -> Result<Self, ConsensusError> {
@@ -213,7 +213,24 @@ impl ConsensusDriver {
             }
         };
         self.pending_block = Some(mined.clone());
-        self.p2p.broadcast_proposal(height, round, mined);
+        let genesis = self.ledger.read().genesis().fingerprint().ok()?;
+        let proposal = SignedProposal {
+            genesis,
+            round,
+            block: mined,
+            signature: Vec::new(),
+        };
+        let signed = match self
+            .signing_journal
+            .sign_proposal(proposal, &self.local_key)
+        {
+            Ok(signed) => signed,
+            Err(error) => {
+                warn!(height, round, "proposal signing refused: {error}");
+                return None;
+            }
+        };
+        self.p2p.broadcast_proposal(signed);
         match self.engine.propose_block(block_hash, proposer_addr) {
             Ok(()) => Some(block_hash),
             Err(e) => {
@@ -230,13 +247,24 @@ impl ConsensusDriver {
         expected_proposer: Address,
     ) -> Option<Hash32> {
         let deadline = Instant::now() + Duration::from_millis(self.timeouts.timeout_propose_ms);
+        let genesis = self.ledger.read().genesis().fingerprint().ok()?;
         let received = loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break None;
             }
             match tokio::time::timeout(remaining, self.inbound_proposal_rx.recv()).await {
-                Ok(Some((h, r, block))) if h == height && r == round => break Some(block),
+                Ok(Some(proposal))
+                    if proposal.block.header.height == height && proposal.round == round =>
+                {
+                    if let Err(error) =
+                        proposal.verify(genesis, expected_proposer, self.engine.validator_set())
+                    {
+                        warn!(height, round, "ignoring unauthenticated proposal: {error}");
+                        continue;
+                    }
+                    break Some(proposal.block);
+                }
                 Ok(Some(_stale_or_future)) => continue,
                 _ => break None,
             }
