@@ -23,6 +23,8 @@ enum Commands {
     Keys(commands::keys::KeysArgs),
     /// Submit transactions to the local chain
     Tx(commands::tx::TxArgs),
+    /// Store, instantiate, execute, or query WASM contracts via a running node
+    Contract(commands::contract::ContractArgs),
     /// Query blockchain state, balances, blocks, and transaction receipts
     Query(commands::query::QueryArgs),
     /// Query local node status and configuration
@@ -40,6 +42,7 @@ async fn main() -> anyhow::Result<()> {
         Commands::Start(args) => commands::start::execute(&args).await,
         Commands::Keys(args) => commands::keys::execute(&args),
         Commands::Tx(args) => commands::tx::execute(&args),
+        Commands::Contract(args) => commands::contract::execute(&args),
         Commands::Query(args) => commands::query::execute(&args),
         Commands::Status(args) => commands::status::execute(&args),
         Commands::Version(args) => commands::version::execute(&args),

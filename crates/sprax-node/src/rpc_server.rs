@@ -418,6 +418,72 @@ async fn handle_json_rpc(
             }
         }
 
+        "sprax_queryContract" => {
+            let params = req.params.as_ref().and_then(Value::as_array);
+            let address = params
+                .and_then(|p| p.first())
+                .and_then(Value::as_str)
+                .and_then(parse_address);
+            let message = params.and_then(|p| p.get(1));
+            let gas = params
+                .and_then(|p| p.get(2))
+                .and_then(Value::as_u64)
+                .unwrap_or(200_000);
+            if gas == 0 || gas > 200_000 {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "query gas must be between 1 and 200000".into(),
+                    None,
+                ));
+            }
+            match (address, message) {
+                (Some(address), Some(message)) => {
+                    static LIMIT: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+                        std::sync::OnceLock::new();
+                    let limiter = LIMIT
+                        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
+                        .clone();
+                    let permit = match limiter.try_acquire_owned() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            return Json(JsonRpcResponse::error(
+                                id,
+                                -32000,
+                                "contract query capacity reached".into(),
+                                None,
+                            ))
+                        }
+                    };
+                    let bytes =
+                        serde_json::to_vec(message).expect("JSON value serialization cannot fail");
+                    let node = state.node.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        node.query_contract(address, &bytes, gas)
+                    })
+                    .await
+                    {
+                        Ok(Ok((data, gas_used))) => {
+                            JsonRpcResponse::success(id, json!({"data":data,"gasUsed":gas_used}))
+                        }
+                        Ok(Err(e)) => JsonRpcResponse::error(id, -32000, e.to_string(), None),
+                        Err(_) => JsonRpcResponse::error(
+                            id,
+                            -32603,
+                            "contract query worker failed".into(),
+                            None,
+                        ),
+                    }
+                }
+                _ => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "expected [contract_address, query_object, optional_gas]".into(),
+                    None,
+                ),
+            }
+        }
         _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {method}"), None),
     };
 

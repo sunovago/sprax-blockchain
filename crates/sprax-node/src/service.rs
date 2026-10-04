@@ -397,6 +397,20 @@ impl NodeService {
         Ok(receipts)
     }
 
+    pub fn query_contract(
+        &self,
+        address: Address,
+        message: &[u8],
+        gas: u64,
+    ) -> Result<(Vec<u8>, u64), NodeError> {
+        let result = self
+            .ledger
+            .read()
+            .query_contract(address, message, gas)
+            .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
+        Ok((result.data, result.gas_used))
+    }
+
     /// Applies a batch of historical blocks for catch-up synchronization.
     pub fn apply_blocks_batch(&self, blocks: Vec<Block>) -> Result<usize, NodeError> {
         let mut count = 0;

@@ -1,0 +1,4 @@
+[target.wasm32-unknown-unknown]
+# CosmWasm entrypoints import their host ABI from the validator runtime.
+# The final module retains these imports; the VM resolves and validates them.
+rustflags = ["-C", "link-arg=--allow-undefined"]

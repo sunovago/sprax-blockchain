@@ -1,3 +1,4 @@
+pub(crate) mod contract;
 pub(crate) mod init;
 pub(crate) mod keys;
 pub(crate) mod query;
