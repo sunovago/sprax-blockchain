@@ -5,6 +5,7 @@ pub mod error;
 pub mod keyring;
 pub mod rpc_server;
 pub mod service;
+pub mod signing_journal;
 pub mod telemetry;
 
 pub use config::{ConsensusNodeConfig, NodeConfig, RpcConfig, TelemetryConfig};

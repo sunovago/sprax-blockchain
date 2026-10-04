@@ -111,6 +111,13 @@ pub struct GenesisConfig {
 }
 
 impl GenesisConfig {
+    pub const IDENTITY_KEY: &'static [u8] = b"chain/genesis-identity/v1";
+
+    pub fn fingerprint(&self) -> Result<Hash32, CoreError> {
+        let bytes = serde_json::to_vec(self).map_err(|e| CoreError::StateError(e.to_string()))?;
+        Ok(Hasher::sha256(&bytes))
+    }
+
     /// Creates a deterministic local development genesis with pre-funded accounts.
     /// Default pre-funded accounts:
     /// - Alice:   1,000,000.00 SPRX
@@ -192,6 +199,39 @@ impl GenesisConfig {
         &self,
         store: &S,
     ) -> Result<BlockHeader, CoreError> {
+        sprax_types::ChainId::new(&self.chain_id)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        if self.initial_height != 0
+            || self.consensus_params.max_block_gas == 0
+            || self.consensus_params.max_block_size_bytes == 0
+        {
+            return Err(CoreError::StateError(
+                "unsupported genesis height or zero block limits".into(),
+            ));
+        }
+        let mut addresses = std::collections::HashSet::new();
+        for account in &self.accounts {
+            if !addresses.insert(account.address) {
+                return Err(CoreError::StateError(
+                    "duplicate genesis account address".into(),
+                ));
+            }
+        }
+        let supply = self
+            .accounts
+            .iter()
+            .try_fold(Amount::ZERO, |sum, account| {
+                sum.checked_add(account.initial_balance)
+            })
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        if supply > self.consensus_params.max_supply {
+            return Err(CoreError::StateError(
+                "genesis allocations exceed maximum supply".into(),
+            ));
+        }
+        store
+            .set(Self::IDENTITY_KEY, self.fingerprint()?.as_bytes())
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
         let mut circulating_supply = Amount::ZERO;
         for acc in &self.accounts {
             let state = AccountState {
@@ -241,7 +281,10 @@ impl GenesisConfig {
             state_root,
             txs_root: Hash32::ZERO,
             receipts_root: Hash32::ZERO,
-            validator_set_hash: Hasher::blake3(b"genesis-validators"),
+            validator_set_hash: Hasher::sha256(
+                &serde_json::to_vec(&self.validators)
+                    .map_err(|e| CoreError::StateError(e.to_string()))?,
+            ),
         };
 
         Ok(header)

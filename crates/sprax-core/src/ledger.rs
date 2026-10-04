@@ -36,6 +36,19 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         genesis: GenesisConfig,
         store: S,
     ) -> Result<Self, CoreError> {
+        if store
+            .get_height()
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .is_some()
+            || !store
+                .scan_prefix(b"")
+                .map_err(|e| CoreError::StateError(e.to_string()))?
+                .is_empty()
+        {
+            return Err(CoreError::StateError(
+                "refusing to initialize genesis over existing chain data".into(),
+            ));
+        }
         let pending = OverlayStore::new(store.clone());
         let genesis_header = genesis.initialize_state(&pending)?;
 
@@ -92,6 +105,14 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         store: S,
         height: u64,
     ) -> Result<Self, CoreError> {
+        let identity = store.get(GenesisConfig::IDENTITY_KEY)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .ok_or_else(|| CoreError::StateError("legacy database has no pinned genesis identity; explicit migration or a separate new chain directory is required".into()))?;
+        if identity.as_slice() != genesis.fingerprint()?.as_bytes() {
+            return Err(CoreError::StateError(
+                "configured genesis does not match persisted chain identity".into(),
+            ));
+        }
         let mut blocks = Vec::with_capacity(height as usize + 1);
         let mut block_by_hash = HashMap::new();
         let mut tx_index = HashMap::new();

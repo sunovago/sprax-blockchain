@@ -1,3 +1,4 @@
+use crate::signing_journal::SigningJournal;
 use parking_lot::RwLock;
 use sprax_consensus::{
     BftConsensusEngine, ConsensusError, ConsensusTimeoutConfig, EquivocationEvidence,
@@ -25,6 +26,7 @@ pub struct ConsensusDriver {
     ledger: Arc<RwLock<ChainLedger<RedbStore>>>,
     p2p: P2pService,
     local_key: Ed25519Keypair,
+    signing_journal: SigningJournal,
     timeouts: ConsensusTimeoutConfig,
     inbound_vote_rx: mpsc::UnboundedReceiver<Vote>,
     inbound_proposal_rx: mpsc::UnboundedReceiver<(u64, u32, Block)>,
@@ -40,33 +42,49 @@ pub struct ConsensusDriver {
 impl ConsensusDriver {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
-        engine: BftConsensusEngine,
+        mut engine: BftConsensusEngine,
         staking: Arc<RwLock<StakingKeeper>>,
         ledger: Arc<RwLock<ChainLedger<RedbStore>>>,
         p2p: P2pService,
         local_key: Ed25519Keypair,
+        signing_journal: SigningJournal,
         timeouts: ConsensusTimeoutConfig,
         inbound_vote_rx: mpsc::UnboundedReceiver<Vote>,
         inbound_proposal_rx: mpsc::UnboundedReceiver<(u64, u32, Block)>,
         is_running: Arc<AtomicBool>,
         min_peers_before_start: usize,
-    ) -> Self {
-        Self {
+    ) -> Result<Self, ConsensusError> {
+        let saved = signing_journal
+            .state()
+            .map_err(ConsensusError::InvalidVote)?;
+        let mut last_attempted_height = 0;
+        let mut current_round = 0;
+        if let Some(saved) = saved {
+            if saved.vote.height == engine.current_height() {
+                last_attempted_height = saved.vote.height;
+                current_round = saved.vote.round;
+                if let (Some(block), Some(round)) = (saved.locked_block, saved.locked_round) {
+                    engine.restore_lock(saved.vote.height, round, block);
+                }
+            }
+        }
+        Ok(Self {
             engine,
             staking,
             ledger,
             p2p,
             local_key,
+            signing_journal,
             timeouts,
             inbound_vote_rx,
             inbound_proposal_rx,
             is_running,
             precommitted_this_round: false,
             pending_block: None,
-            last_attempted_height: 0,
-            current_round: 0,
+            last_attempted_height,
+            current_round,
             min_peers_before_start,
-        }
+        })
     }
 
     /// Drives one BFT round per height for as long as the node is running.
@@ -116,7 +134,11 @@ impl ConsensusDriver {
     async fn run_one_height(&mut self) {
         let next_height = self.ledger.read().height() + 1;
         let round = if next_height == self.last_attempted_height {
-            self.current_round += 1;
+            let Some(next_round) = self.current_round.checked_add(1) else {
+                warn!("consensus round exhausted; refusing to wrap signing coordinates");
+                return;
+            };
+            self.current_round = next_round;
             self.current_round
         } else {
             self.last_attempted_height = next_height;
@@ -158,13 +180,9 @@ impl ConsensusDriver {
             Some(locked) if locked != block_hash => None,
             _ => Some(block_hash),
         };
-        if let Ok(vote) = Self::build_signed_vote(
-            VoteType::Prevote,
-            next_height,
-            round,
-            prevote_hash,
-            &self.local_key,
-        ) {
+        if let Ok(vote) =
+            self.build_signed_vote(VoteType::Prevote, next_height, round, prevote_hash)
+        {
             self.broadcast_and_feed_vote(vote).await;
             if self.maybe_cast_reactive_precommit(next_height, round).await {
                 return;
@@ -263,9 +281,7 @@ impl ConsensusDriver {
     }
 
     async fn cast_nil_prevote(&mut self, height: u64, round: u32) {
-        if let Ok(vote) =
-            Self::build_signed_vote(VoteType::Prevote, height, round, None, &self.local_key)
-        {
+        if let Ok(vote) = self.build_signed_vote(VoteType::Prevote, height, round, None) {
             self.broadcast_and_feed_vote(vote).await;
         }
     }
@@ -381,13 +397,7 @@ impl ConsensusDriver {
         let Some(bh) = self.engine.get_prevoted_block_with_quorum(height, round) else {
             return false;
         };
-        let vote = match Self::build_signed_vote(
-            VoteType::Precommit,
-            height,
-            round,
-            Some(bh),
-            &self.local_key,
-        ) {
+        let vote = match self.build_signed_vote(VoteType::Precommit, height, round, Some(bh)) {
             Ok(v) => v,
             Err(_) => return false,
         };
@@ -468,23 +478,26 @@ impl ConsensusDriver {
     }
 
     fn build_signed_vote(
+        &self,
         vote_type: VoteType,
         height: u64,
         round: u32,
         block_hash: Option<Hash32>,
-        signer: &Ed25519Keypair,
     ) -> Result<Vote, ConsensusError> {
-        let mut vote = Vote::new(
+        let vote = Vote::new(
             vote_type,
             height,
             round,
             block_hash,
-            signer.address(),
+            self.local_key.address(),
             vec![],
         );
-        let sign_bytes = vote.sign_bytes()?;
-        vote.signature = signer.sign(&sign_bytes);
-        Ok(vote)
+        self.signing_journal
+            .sign(vote, &self.local_key)
+            .map_err(|error| {
+                warn!(height, round, "validator signing refused: {error}");
+                ConsensusError::InvalidVote(error)
+            })
     }
 }
 

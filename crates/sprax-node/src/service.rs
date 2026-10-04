@@ -423,6 +423,31 @@ impl NodeService {
 
     /// Starts the background node service and P2P networking layer.
     pub async fn start(&self) -> Result<(), NodeError> {
+        let local_validator_key = self
+            .config
+            .consensus
+            .local_validator_key_name
+            .as_ref()
+            .and_then(|name| self.keyring.read().get_ed25519_keypair(name).ok());
+
+        let signing_journal = if self.config.consensus.enabled {
+            local_validator_key
+                .as_ref()
+                .map(|key| {
+                    let genesis = serde_json::to_vec(self.ledger.read().genesis())
+                        .map_err(|e| NodeError::ConfigError(e.to_string()))?;
+                    crate::signing_journal::SigningJournal::open(
+                        &self.config.home_dir.join("data/validator-signing.redb"),
+                        Hasher::sha256(&genesis),
+                        key,
+                    )
+                    .map_err(NodeError::StorageError)
+                })
+                .transpose()?
+        } else {
+            None
+        };
+
         if self.is_running.swap(true, Ordering::SeqCst) {
             return Err(NodeError::RuntimeError("node is already running".into()));
         }
@@ -517,13 +542,6 @@ impl NodeService {
             Arc::clone(&self.is_running),
         ));
 
-        let local_validator_key = self
-            .config
-            .consensus
-            .local_validator_key_name
-            .as_ref()
-            .and_then(|name| self.keyring.read().get_ed25519_keypair(name).ok());
-
         if self.config.consensus.enabled {
             if let Some(val_key) = local_validator_key {
                 let val_set = self
@@ -542,12 +560,16 @@ impl NodeService {
                     Arc::clone(&self.ledger),
                     p2p_service,
                     val_key,
+                    signing_journal.ok_or_else(|| {
+                        NodeError::RuntimeError("missing validator signing journal".into())
+                    })?,
                     self.config.consensus.timeouts.clone(),
                     inbound_vote_rx,
                     inbound_proposal_rx,
                     Arc::clone(&self.is_running),
                     self.config.network.bootstrap_peers.len(),
-                );
+                )
+                .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
                 tokio::spawn(driver.run());
             } else {
                 warn!(

@@ -53,6 +53,14 @@ impl BftConsensusEngine {
         self.state.locked_block
     }
 
+    /// Restore a lock that was durably recorded before releasing a precommit.
+    pub fn restore_lock(&mut self, height: u64, round: u32, block: Hash32) {
+        if height == self.state.height {
+            self.state.locked_round = Some(round);
+            self.state.locked_block = Some(block);
+        }
+    }
+
     #[must_use]
     pub fn valid_round(&self) -> Option<u32> {
         self.state.valid_round

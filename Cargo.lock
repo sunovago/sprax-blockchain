@@ -3026,6 +3026,7 @@ dependencies = [
  "axum",
  "hex",
  "parking_lot",
+ "redb",
  "serde",
  "serde_json",
  "sprax-consensus",

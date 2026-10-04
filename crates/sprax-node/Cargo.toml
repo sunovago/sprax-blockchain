@@ -11,6 +11,7 @@ description = "Node service runtime, configuration manager, environment profiles
 workspace = true
 
 [dependencies]
+redb.workspace = true
 sprax-types.workspace = true
 sprax-crypto.workspace = true
 sprax-storage = { workspace = true, features = ["redb-store"] }
