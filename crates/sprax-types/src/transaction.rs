@@ -12,15 +12,41 @@ pub enum KeyType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxMessage {
     /// Native asset transfer
-    Transfer { to: Address, amount: Amount },
+    Transfer {
+        to: Address,
+        amount: Amount,
+    },
     /// Staking delegation to a validator
-    Delegate { validator: Address, amount: Amount },
+    Delegate {
+        validator: Address,
+        amount: Amount,
+    },
     /// Staking unbonding from a validator
-    Unbond { validator: Address, amount: Amount },
+    Unbond {
+        validator: Address,
+        amount: Amount,
+    },
     /// Smart contract execution payload
-    ContractCall { contract: Address, data: Vec<u8> },
+    ContractCall {
+        contract: Address,
+        data: Vec<u8>,
+        #[serde(default)]
+        funds: Amount,
+    },
+    StoreCode {
+        wasm_bytecode: Vec<u8>,
+    },
+    InstantiateContract {
+        code_id: Hash32,
+        msg: Vec<u8>,
+        funds: Amount,
+        label: String,
+    },
     /// Generic extensible payload
-    Generic { type_url: String, payload: Vec<u8> },
+    Generic {
+        type_url: String,
+        payload: Vec<u8>,
+    },
 }
 
 /// Fee and gas specification for transaction execution.

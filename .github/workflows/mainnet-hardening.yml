@@ -26,10 +26,14 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
       - name: Verify formatting
         run: cargo fmt --all -- --check
       - name: Run workspace regression and integration tests
-        run: cargo test --workspace --all-features --locked
+        run: |
+          cargo build --manifest-path contracts/examples/counter/Cargo.toml --target wasm32-unknown-unknown --release --locked
+          export SPRX_TEST_CONTRACT_WASM="$GITHUB_WORKSPACE/contracts/examples/counter/target/wasm32-unknown-unknown/release/sprax_counter.wasm"
+          cargo test --workspace --all-features --locked
       - name: Verify lint checks
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings

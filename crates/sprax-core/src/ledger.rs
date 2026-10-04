@@ -17,7 +17,8 @@ use std::collections::HashMap;
 /// type (no explicit `<S>`) keeps compiling unchanged; `sprax-node` opts into a durable
 /// backend explicitly (`ChainLedger<RedbStore>`).
 #[derive(Debug)]
-pub struct ChainLedger<S: KVStore + StateCommitment + ChainMetaStore + Clone = MemKVStore> {
+pub struct ChainLedger<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static = MemKVStore>
+{
     genesis: GenesisConfig,
     store: S,
     blocks: Vec<Block>,
@@ -27,7 +28,7 @@ pub struct ChainLedger<S: KVStore + StateCommitment + ChainMetaStore + Clone = M
     executor: TxExecutor,
 }
 
-impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
+impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedger<S> {
     /// Initializes a fresh blockchain ledger from a genesis specification against `store`,
     /// persisting the genesis block so a subsequent [`Self::open_or_init`] against the same
     /// store recognizes state already exists.
@@ -282,7 +283,11 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
 
         let mut total_transfer_cost = sprax_types::Amount::ZERO;
         for msg in &tx.body.messages {
-            if let TxMessage::Transfer { amount, .. } | TxMessage::Delegate { amount, .. } = msg {
+            if let TxMessage::Transfer { amount, .. }
+            | TxMessage::Delegate { amount, .. }
+            | TxMessage::InstantiateContract { funds: amount, .. }
+            | TxMessage::ContractCall { funds: amount, .. } = msg
+            {
                 total_transfer_cost = total_transfer_cost
                     .checked_add(*amount)
                     .map_err(|e| CoreError::StateError(e.to_string()))?;
@@ -418,18 +423,18 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
                 .len();
             let next_gas = reserved_gas.checked_add(tx.body.fee.gas_limit);
             let next_bytes = reserved_bytes.checked_add(bytes);
-            if next_gas.map_or(true, |gas| {
-                gas > self.genesis.consensus_params.max_block_gas
-            }) || next_bytes.map_or(true, |size| {
-                size > self.genesis.consensus_params.max_block_size_bytes
-            }) {
+            if !next_gas.is_some_and(|gas| gas <= self.genesis.consensus_params.max_block_gas)
+                || !next_bytes
+                    .is_some_and(|size| size <= self.genesis.consensus_params.max_block_size_bytes)
+            {
                 self.mempool.push(tx);
                 continue;
             }
-            match self.executor.execute_transaction(
+            match self.executor.execute_transaction_at_time(
                 &self.store,
                 &tx,
                 current_height,
+                parent_timestamp + 2,
                 &self.genesis.chain_id,
                 self.genesis.consensus_params.unbonding_period_blocks,
             ) {
@@ -561,9 +566,7 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
             .transactions
             .iter()
             .try_fold(0u64, |sum, tx| sum.checked_add(tx.body.fee.gas_limit));
-        if reserved_gas.map_or(true, |gas| {
-            gas > self.genesis.consensus_params.max_block_gas
-        }) {
+        if !reserved_gas.is_some_and(|gas| gas <= self.genesis.consensus_params.max_block_gas) {
             return Err(CoreError::ModuleError {
                 module: "consensus".into(),
                 reason: "block exceeds gas limit".into(),
@@ -588,10 +591,11 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         let mut receipts = Vec::with_capacity(block.body.transactions.len());
 
         for tx in &block.body.transactions {
-            let receipt = self.executor.execute_transaction(
+            let receipt = self.executor.execute_transaction_at_time(
                 &self.store,
                 tx,
                 block_height,
+                block.header.timestamp_unix_secs,
                 &self.genesis.chain_id,
                 self.genesis.consensus_params.unbonding_period_blocks,
             )?;
@@ -690,6 +694,25 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         self.tx_index
             .get(hash)
             .map(|(tx, receipt, h)| (tx, receipt, *h))
+    }
+
+    pub fn query_contract(
+        &self,
+        address: Address,
+        msg: &[u8],
+        gas: u64,
+    ) -> Result<sprax_wasm::RuntimeResult, CoreError> {
+        let context = sprax_wasm::ContractContext {
+            chain_id: self.chain_id().into(),
+            height: self.height(),
+            timestamp: self.latest_header().timestamp_unix_secs,
+            sender: Address::ZERO,
+            nonce: 0,
+            message_index: 0,
+        };
+        sprax_wasm::CosmWasmRuntime
+            .query(&self.store, address, &context, msg, gas)
+            .map_err(CoreError::ExecutionReverted)
     }
 
     /// Overwrites the finalized commit signatures on a already-committed block (called once a

@@ -91,10 +91,7 @@ impl TxExecutor {
                     });
                 }
             }
-            if matches!(
-                msg,
-                TxMessage::ContractCall { .. } | TxMessage::Generic { .. }
-            ) {
+            if matches!(msg, TxMessage::Generic { .. }) {
                 return Err(CoreError::ModuleError {
                     module: "execution".into(),
                     reason: "unsupported message type".into(),
@@ -106,11 +103,31 @@ impl TxExecutor {
     }
 
     /// Executes a transaction against state store, mutating balances and nonces atomically.
-    pub fn execute_transaction<S: KVStore + Clone>(
+    pub fn execute_transaction<S: KVStore + Clone + 'static>(
         &self,
         store: &S,
         tx: &Transaction,
         current_height: u64,
+        expected_chain_id: &str,
+        unbonding_period_blocks: u64,
+    ) -> Result<TxReceipt, CoreError> {
+        self.execute_transaction_at_time(
+            store,
+            tx,
+            current_height,
+            1_700_000_000 + current_height * 2,
+            expected_chain_id,
+            unbonding_period_blocks,
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub fn execute_transaction_at_time<S: KVStore + Clone + 'static>(
+        &self,
+        store: &S,
+        tx: &Transaction,
+        current_height: u64,
+        timestamp: u64,
         expected_chain_id: &str,
         unbonding_period_blocks: u64,
     ) -> Result<TxReceipt, CoreError> {
@@ -119,6 +136,7 @@ impl TxExecutor {
             &overlay,
             tx,
             current_height,
+            timestamp,
             expected_chain_id,
             unbonding_period_blocks,
         )?;
@@ -128,11 +146,13 @@ impl TxExecutor {
         Ok(receipt)
     }
 
-    fn execute_transaction_inner<S: KVStore>(
+    #[allow(clippy::too_many_arguments)]
+    fn execute_transaction_inner<S: KVStore + Clone + 'static>(
         &self,
         store: &S,
         tx: &Transaction,
         current_height: u64,
+        timestamp: u64,
         expected_chain_id: &str,
         unbonding_period_blocks: u64,
     ) -> Result<TxReceipt, CoreError> {
@@ -168,7 +188,11 @@ impl TxExecutor {
         // up front).
         let mut total_transfer_cost = sprax_types::Amount::ZERO;
         for msg in &tx.body.messages {
-            if let TxMessage::Transfer { amount, .. } | TxMessage::Delegate { amount, .. } = msg {
+            if let TxMessage::Transfer { amount, .. }
+            | TxMessage::Delegate { amount, .. }
+            | TxMessage::InstantiateContract { funds: amount, .. }
+            | TxMessage::ContractCall { funds: amount, .. } = msg
+            {
                 total_transfer_cost = total_transfer_cost
                     .checked_add(*amount)
                     .map_err(|e| CoreError::StateError(e.to_string()))?;
@@ -229,7 +253,17 @@ impl TxExecutor {
         }
 
         // Apply message credits
-        for msg in &tx.body.messages {
+        let mut return_data = Vec::new();
+        for (message_index, msg) in tx.body.messages.iter().enumerate() {
+            let context = sprax_wasm::ContractContext {
+                chain_id: expected_chain_id.into(),
+                height: current_height,
+                timestamp,
+                sender: tx.body.sender,
+                nonce: tx.body.nonce,
+                message_index: u32::try_from(message_index)
+                    .map_err(|_| CoreError::StateError("too many transaction messages".into()))?,
+            };
             match msg {
                 TxMessage::Transfer { to, amount } => {
                     let mut recipient_state = StateAccessor::get_account(store, to)?;
@@ -291,7 +325,61 @@ impl TxExecutor {
                     };
                     StateAccessor::set_unbonding(store, &entry, tx.body.nonce)?;
                 }
-                _ => {
+                TxMessage::StoreCode { wasm_bytecode } => {
+                    let (id, consumed) = sprax_wasm::CosmWasmRuntime
+                        .store_code(store, wasm_bytecode, gas.remaining())
+                        .map_err(CoreError::ExecutionReverted)?;
+                    gas.consume_gas(consumed)?;
+                    return_data = serde_json::to_vec(&id)
+                        .map_err(|e| CoreError::StateError(e.to_string()))?;
+                }
+                TxMessage::InstantiateContract {
+                    code_id,
+                    msg,
+                    funds,
+                    label,
+                } => {
+                    let address = sprax_wasm::CosmWasmRuntime::contract_address(&context, *code_id);
+                    let mut account = StateAccessor::get_account(store, &address)?;
+                    account.balance = account
+                        .balance
+                        .checked_add(*funds)
+                        .map_err(|e| CoreError::StateError(e.to_string()))?;
+                    account.code_hash = *code_id;
+                    StateAccessor::set_account(store, &address, &account)?;
+                    let (address, result) = sprax_wasm::CosmWasmRuntime
+                        .instantiate(
+                            store,
+                            *code_id,
+                            &context,
+                            msg,
+                            label,
+                            *funds,
+                            gas.remaining(),
+                        )
+                        .map_err(CoreError::ExecutionReverted)?;
+                    gas.consume_gas(result.gas_used)?;
+                    return_data = serde_json::to_vec(&address)
+                        .map_err(|e| CoreError::StateError(e.to_string()))?;
+                }
+                TxMessage::ContractCall {
+                    contract,
+                    data,
+                    funds,
+                } => {
+                    let mut account = StateAccessor::get_account(store, contract)?;
+                    account.balance = account
+                        .balance
+                        .checked_add(*funds)
+                        .map_err(|e| CoreError::StateError(e.to_string()))?;
+                    StateAccessor::set_account(store, contract, &account)?;
+                    let result = sprax_wasm::CosmWasmRuntime
+                        .execute(store, *contract, &context, data, *funds, gas.remaining())
+                        .map_err(CoreError::ExecutionReverted)?;
+                    gas.consume_gas(result.gas_used)?;
+                    return_data = result.data;
+                }
+                TxMessage::Generic { .. } => {
                     return Err(CoreError::ModuleError {
                         module: "execution".into(),
                         reason: "unsupported message type".into(),
@@ -308,7 +396,7 @@ impl TxExecutor {
             success: true,
             gas_used: gas.consumed(),
             error_message: None,
-            return_data: vec![],
+            return_data,
         })
     }
 }

@@ -2928,6 +2928,7 @@ dependencies = [
  "sprax-crypto",
  "sprax-storage",
  "sprax-types",
+ "sprax-wasm",
  "thiserror 2.0.20",
  "tracing",
 ]
