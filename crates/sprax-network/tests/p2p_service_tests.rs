@@ -28,14 +28,14 @@ fn synthetic_block(height: u64) -> Block {
 
 fn build_service(
     port: u16,
-    inbound_block_tx: mpsc::UnboundedSender<Block>,
+    inbound_block_tx: mpsc::Sender<Block>,
     block_fetch_fn: BlockFetchFn,
 ) -> P2pService {
     let peer_id = PeerId::new(format!("node-{port}")).unwrap();
-    let (tx_tx, _tx_rx) = mpsc::unbounded_channel();
-    let (vote_tx, _vote_rx) = mpsc::unbounded_channel();
-    let (proposal_tx, _proposal_rx) = mpsc::unbounded_channel();
-    let (evidence_tx, _evidence_rx) = mpsc::unbounded_channel();
+    let (tx_tx, _tx_rx) = mpsc::channel(128);
+    let (vote_tx, _vote_rx) = mpsc::channel(128);
+    let (proposal_tx, _proposal_rx) = mpsc::channel(128);
+    let (evidence_tx, _evidence_rx) = mpsc::channel(128);
     let config = NetworkConfig {
         p2p_port: port,
         ..Default::default()
@@ -59,13 +59,13 @@ async fn test_get_blocks_request_response_round_trip_over_real_tcp() {
     let low_port = 38_901u16;
 
     // The "ahead" node (height 5) serves blocks 1..=5 out of its in-memory store when asked.
-    let (high_block_tx, mut high_block_rx) = mpsc::unbounded_channel();
+    let (high_block_tx, mut high_block_rx) = mpsc::channel(128);
     let fetch_fn: BlockFetchFn = Arc::new(|from, to| (from..=to).map(synthetic_block).collect());
     let high = build_service(high_port, high_block_tx, fetch_fn);
     high.start(5, Hash32::new([5u8; 32])).await.unwrap();
 
     // The "behind" node (height 0) has nothing to serve and just observes what it catches up on.
-    let (low_block_tx, mut low_block_rx) = mpsc::unbounded_channel();
+    let (low_block_tx, mut low_block_rx) = mpsc::channel(128);
     let empty_fetch_fn: BlockFetchFn = Arc::new(|_, _| vec![]);
     let low = build_service(low_port, low_block_tx, empty_fetch_fn);
     low.start(0, Hash32::ZERO).await.unwrap();

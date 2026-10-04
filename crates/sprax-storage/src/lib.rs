@@ -14,8 +14,8 @@ pub use overlay::OverlayStore;
 pub use pruning::PruningStrategy;
 pub use roots::compute_flat_root;
 pub use traits::{
-    BatchOperation, BatchWriter, ChainMetaStore, ChainWriteBatch, KVStore, ReadonlyKVStore,
-    StateCommitment,
+    prefix_upper_bound, BatchOperation, BatchWriter, ChainMetaStore, ChainWriteBatch, KVStore,
+    ReadonlyKVStore, StateCommitment,
 };
 
 #[cfg(feature = "redb-store")]

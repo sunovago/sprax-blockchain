@@ -271,6 +271,20 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
 
     /// Submits a signed transaction into the local mempool after pre-validation.
     pub fn submit_transaction(&mut self, tx: Transaction) -> Result<Hash32, CoreError> {
+        if self.mempool.len() >= 128 {
+            return Err(CoreError::ModuleError {
+                module: "mempool".into(),
+                reason: "mempool is full; retry after a block is finalized".into(),
+            });
+        }
+        let encoded =
+            serde_json::to_vec(&tx).map_err(|error| CoreError::StateError(error.to_string()))?;
+        if encoded.len() > 2 * 1024 * 1024 {
+            return Err(CoreError::ModuleError {
+                module: "mempool".into(),
+                reason: "transaction exceeds the 2 MiB admission limit".into(),
+            });
+        }
         let tx_hash = Hasher::tx_hash(&tx).map_err(|e| CoreError::StateError(e.to_string()))?;
 
         // Check if already in tx index or mempool

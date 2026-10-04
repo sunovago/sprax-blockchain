@@ -28,8 +28,8 @@ pub struct ConsensusDriver {
     local_key: Ed25519Keypair,
     signing_journal: SigningJournal,
     timeouts: ConsensusTimeoutConfig,
-    inbound_vote_rx: mpsc::UnboundedReceiver<Vote>,
-    inbound_proposal_rx: mpsc::UnboundedReceiver<(u64, u32, Block)>,
+    inbound_vote_rx: mpsc::Receiver<Vote>,
+    inbound_proposal_rx: mpsc::Receiver<(u64, u32, Block)>,
     is_running: Arc<AtomicBool>,
     precommitted_this_round: bool,
     pending_block: Option<Block>,
@@ -49,8 +49,8 @@ impl ConsensusDriver {
         local_key: Ed25519Keypair,
         signing_journal: SigningJournal,
         timeouts: ConsensusTimeoutConfig,
-        inbound_vote_rx: mpsc::UnboundedReceiver<Vote>,
-        inbound_proposal_rx: mpsc::UnboundedReceiver<(u64, u32, Block)>,
+        inbound_vote_rx: mpsc::Receiver<Vote>,
+        inbound_proposal_rx: mpsc::Receiver<(u64, u32, Block)>,
         is_running: Arc<AtomicBool>,
         min_peers_before_start: usize,
     ) -> Result<Self, ConsensusError> {
@@ -504,7 +504,7 @@ impl ConsensusDriver {
 pub async fn run_evidence_listener(
     staking: Arc<RwLock<StakingKeeper>>,
     ledger: Arc<RwLock<ChainLedger<RedbStore>>>,
-    mut inbound_evidence_rx: mpsc::UnboundedReceiver<EquivocationEvidence>,
+    mut inbound_evidence_rx: mpsc::Receiver<EquivocationEvidence>,
     is_running: Arc<AtomicBool>,
 ) {
     while is_running.load(Ordering::SeqCst) {

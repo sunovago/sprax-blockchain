@@ -51,6 +51,40 @@ impl<S: KVStore + ChainMetaStore> OverlayStore<S> {
 }
 
 impl<S: KVStore> ReadonlyKVStore for OverlayStore<S> {
+    fn scan_range_bounded(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let base = self
+            .base
+            .scan_range_bounded(start, end, max_records, max_bytes)?;
+        let mut bytes: usize = base
+            .iter()
+            .map(|(key, value)| key.len() + value.len())
+            .sum();
+        let mut merged: BTreeMap<_, _> = base.into_iter().collect();
+        for (key, value) in self.writes.read().range(start.to_vec()..) {
+            if end.is_some_and(|end| key.as_slice() >= end) {
+                break;
+            }
+            if let Some(previous) = merged.remove(key) {
+                bytes -= key.len() + previous.len();
+            }
+            if let Some(value) = value {
+                bytes = bytes.saturating_add(key.len()).saturating_add(value.len());
+                if merged.len() >= max_records || bytes > max_bytes {
+                    return Err(StorageError::DatabaseError(
+                        "scan resource limit exceeded".into(),
+                    ));
+                }
+                merged.insert(key.clone(), value.clone());
+            }
+        }
+        Ok(merged.into_iter().collect())
+    }
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         if let Some(value) = self.writes.read().get(key) {
             return Ok(value.clone());

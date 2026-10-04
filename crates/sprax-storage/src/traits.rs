@@ -15,6 +15,15 @@ pub trait ReadonlyKVStore {
     /// natively; [`scan_prefix`](Self::scan_prefix) is defined in terms of it below.
     fn scan_range(&self, start: &[u8], end: Option<&[u8]>) -> Result<KvPairs, StorageError>;
 
+    /// Collect an entire range only if it fits both limits. Check limits before cloning records.
+    fn scan_range_bounded(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> Result<KvPairs, StorageError>;
+
     /// Returns all key-value pairs whose key starts with `prefix`, sorted by key ascending.
     /// Backs range/iterator host functions (e.g. CosmWasm's `db_scan`/`db_next`) that need to
     /// walk a contract's own key space without seeing unrelated keys in the same flat store.

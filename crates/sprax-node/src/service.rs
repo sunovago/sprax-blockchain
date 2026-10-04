@@ -452,11 +452,11 @@ impl NodeService {
             return Err(NodeError::RuntimeError("node is already running".into()));
         }
 
-        let (inbound_tx_tx, mut inbound_tx_rx) = mpsc::unbounded_channel::<Transaction>();
-        let (inbound_block_tx, mut inbound_block_rx) = mpsc::unbounded_channel::<Block>();
-        let (inbound_vote_tx, inbound_vote_rx) = mpsc::unbounded_channel();
-        let (inbound_proposal_tx, inbound_proposal_rx) = mpsc::unbounded_channel();
-        let (inbound_evidence_tx, inbound_evidence_rx) = mpsc::unbounded_channel();
+        let (inbound_tx_tx, mut inbound_tx_rx) = mpsc::channel::<Transaction>(128);
+        let (inbound_block_tx, mut inbound_block_rx) = mpsc::channel::<Block>(16);
+        let (inbound_vote_tx, inbound_vote_rx) = mpsc::channel(4096);
+        let (inbound_proposal_tx, inbound_proposal_rx) = mpsc::channel(16);
+        let (inbound_evidence_tx, inbound_evidence_rx) = mpsc::channel(128);
 
         let peer_id_seed = format!(
             "{}:{}:{}",

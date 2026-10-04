@@ -95,6 +95,35 @@ impl RedbStore {
 }
 
 impl ReadonlyKVStore for RedbStore {
+    fn scan_range_bounded(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let read_txn = self.db.begin_read().map_err(db_err)?;
+        let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;
+        let range = match end {
+            Some(end) => table.range(start..end).map_err(db_err)?,
+            None => table.range(start..).map_err(db_err)?,
+        };
+        let mut pairs = Vec::new();
+        let mut bytes = 0usize;
+        for item in range {
+            let (key, value) = item.map_err(db_err)?;
+            bytes = bytes
+                .saturating_add(key.value().len())
+                .saturating_add(value.value().len());
+            if pairs.len() >= max_records || bytes > max_bytes {
+                return Err(StorageError::DatabaseError(
+                    "scan resource limit exceeded".into(),
+                ));
+            }
+            pairs.push((key.value().to_vec(), value.value().to_vec()));
+        }
+        Ok(pairs)
+    }
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         let read_txn = self.db.begin_read().map_err(db_err)?;
         let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;

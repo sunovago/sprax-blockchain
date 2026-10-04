@@ -34,6 +34,30 @@ impl MemKVStore {
 }
 
 impl ReadonlyKVStore for MemKVStore {
+    fn scan_range_bounded(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let guard = self.inner.read();
+        let mut pairs = Vec::new();
+        let mut bytes = 0usize;
+        for (key, value) in guard.range(start.to_vec()..) {
+            if end.is_some_and(|end| key.as_slice() >= end) {
+                break;
+            }
+            bytes = bytes.saturating_add(key.len()).saturating_add(value.len());
+            if pairs.len() >= max_records || bytes > max_bytes {
+                return Err(StorageError::DatabaseError(
+                    "scan resource limit exceeded".into(),
+                ));
+            }
+            pairs.push((key.clone(), value.clone()));
+        }
+        Ok(pairs)
+    }
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         let guard = self.inner.read();
         Ok(guard.get(key).cloned())

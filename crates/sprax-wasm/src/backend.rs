@@ -6,6 +6,11 @@ use sprax_types::Address;
 use std::collections::BTreeMap;
 
 pub const HOST_GAS_PER_BYTE: u64 = 100_000;
+pub const MAX_STORAGE_KEY_BYTES: usize = 1024;
+pub const MAX_STORAGE_VALUE_BYTES: usize = 64 * 1024;
+pub const MAX_SCAN_RECORDS: usize = 1024;
+pub const MAX_SCAN_BYTES: usize = 1024 * 1024;
+pub const MAX_ITERATORS: usize = 16;
 
 #[derive(Debug, Clone)]
 pub struct ChainApi;
@@ -81,6 +86,12 @@ impl<S: KVStore> ChainStorage<S> {
 
 impl<S: KVStore> Storage for ChainStorage<S> {
     fn get(&self, key: &[u8]) -> BackendResult<Option<Vec<u8>>> {
+        if key.len() > MAX_STORAGE_KEY_BYTES {
+            return (
+                Err(BackendError::user_err("storage key exceeds size limit")),
+                Self::cost(key.len()),
+            );
+        }
         let result = self
             .store
             .get(&self.key(key))
@@ -93,6 +104,14 @@ impl<S: KVStore> Storage for ChainStorage<S> {
         (result, Self::cost(key.len() + bytes))
     }
     fn set(&mut self, key: &[u8], value: &[u8]) -> BackendResult<()> {
+        if key.len() > MAX_STORAGE_KEY_BYTES || value.len() > MAX_STORAGE_VALUE_BYTES {
+            return (
+                Err(BackendError::user_err(
+                    "storage key or value exceeds size limit",
+                )),
+                Self::cost(key.len() + value.len()),
+            );
+        }
         if self.readonly {
             return (
                 Err(BackendError::user_err("query storage is read-only")),
@@ -126,9 +145,44 @@ impl<S: KVStore> Storage for ChainStorage<S> {
         end: Option<&[u8]>,
         order: Order,
     ) -> BackendResult<u32> {
-        let pairs = match self.store.scan_prefix(&self.prefix) {
+        if self.iterators.len() >= MAX_ITERATORS
+            || start.is_some_and(|s| s.len() > MAX_STORAGE_KEY_BYTES)
+            || end.is_some_and(|e| e.len() > MAX_STORAGE_KEY_BYTES)
+        {
+            return (
+                Err(BackendError::user_err("iterator resource limit exceeded")),
+                Self::cost(0),
+            );
+        }
+        if start.zip(end).is_some_and(|(start, end)| start >= end) {
+            let id = self.next_iterator;
+            let Some(next) = id.checked_add(1) else {
+                return (
+                    Err(BackendError::unknown("iterator limit reached")),
+                    Self::cost(0),
+                );
+            };
+            self.next_iterator = next;
+            self.iterators.insert(id, Vec::new().into_iter());
+            return (Ok(id), Self::cost(0));
+        }
+        let lower = start.map_or_else(|| self.prefix.clone(), |start| self.key(start));
+        let upper = end
+            .map(|end| self.key(end))
+            .or_else(|| sprax_storage::prefix_upper_bound(&self.prefix));
+        let pairs = match self.store.scan_range_bounded(
+            &lower,
+            upper.as_deref(),
+            MAX_SCAN_RECORDS,
+            MAX_SCAN_BYTES,
+        ) {
             Ok(pairs) => pairs,
-            Err(e) => return (Err(BackendError::unknown(e.to_string())), Self::cost(0)),
+            Err(e) => {
+                return (
+                    Err(BackendError::unknown(e.to_string())),
+                    Self::cost(MAX_SCAN_BYTES),
+                )
+            }
         };
         let mut records: Vec<Record> = pairs
             .into_iter()
@@ -154,7 +208,13 @@ impl<S: KVStore> Storage for ChainStorage<S> {
             Some(iterator) => {
                 let record = iterator.next();
                 let bytes = record.as_ref().map_or(0, |(k, v)| k.len() + v.len());
+                if record.is_none() {
+                    self.iterators.remove(&iterator_id);
+                }
                 (Ok(record), Self::cost(bytes))
+            }
+            None if iterator_id > 0 && iterator_id < self.next_iterator => {
+                (Ok(None), Self::cost(0))
             }
             None => (
                 Err(BackendError::iterator_does_not_exist(iterator_id)),

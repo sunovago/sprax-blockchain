@@ -31,13 +31,13 @@ pub struct PeerHandle {
     pub height: u64,
     pub latest_block_hash: Hash32,
     pub score: PeerScore,
-    sender: mpsc::UnboundedSender<NetworkMessage>,
+    sender: mpsc::Sender<NetworkMessage>,
 }
 
 impl PeerHandle {
     pub fn send(&self, msg: NetworkMessage) -> Result<(), NetworkError> {
         self.sender
-            .send(msg)
+            .try_send(msg)
             .map_err(|e| NetworkError::ConnectionFailed(format!("failed to send message: {e}")))
     }
 }
@@ -53,11 +53,11 @@ pub struct P2pService {
     peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
     known_addresses: Arc<RwLock<HashSet<String>>>,
     is_running: Arc<AtomicBool>,
-    inbound_tx_tx: mpsc::UnboundedSender<Transaction>,
-    inbound_block_tx: mpsc::UnboundedSender<Block>,
-    inbound_vote_tx: mpsc::UnboundedSender<Vote>,
-    inbound_proposal_tx: mpsc::UnboundedSender<(u64, u32, Block)>,
-    inbound_evidence_tx: mpsc::UnboundedSender<EquivocationEvidence>,
+    inbound_tx_tx: mpsc::Sender<Transaction>,
+    inbound_block_tx: mpsc::Sender<Block>,
+    inbound_vote_tx: mpsc::Sender<Vote>,
+    inbound_proposal_tx: mpsc::Sender<(u64, u32, Block)>,
+    inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
     block_fetch_fn: BlockFetchFn,
 }
 
@@ -77,11 +77,11 @@ impl P2pService {
         local_peer_id: PeerId,
         chain_id: String,
         config: NetworkConfig,
-        inbound_tx_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block_tx: mpsc::UnboundedSender<Block>,
-        inbound_vote_tx: mpsc::UnboundedSender<Vote>,
-        inbound_proposal_tx: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence_tx: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx_tx: mpsc::Sender<Transaction>,
+        inbound_block_tx: mpsc::Sender<Block>,
+        inbound_vote_tx: mpsc::Sender<Vote>,
+        inbound_proposal_tx: mpsc::Sender<(u64, u32, Block)>,
+        inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Self {
         let mut known = HashSet::new();
@@ -311,11 +311,11 @@ impl P2pService {
         latest_hash: Hash32,
         peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
         known: Arc<RwLock<HashSet<String>>>,
-        inbound_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block: mpsc::UnboundedSender<Block>,
-        inbound_vote: mpsc::UnboundedSender<Vote>,
-        inbound_proposal: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx: mpsc::Sender<Transaction>,
+        inbound_block: mpsc::Sender<Block>,
+        inbound_vote: mpsc::Sender<Vote>,
+        inbound_proposal: mpsc::Sender<(u64, u32, Block)>,
+        inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Result<(), NetworkError> {
         let remote_msg =
@@ -382,11 +382,11 @@ impl P2pService {
         latest_hash: Hash32,
         peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
         _known: Arc<RwLock<HashSet<String>>>,
-        inbound_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block: mpsc::UnboundedSender<Block>,
-        inbound_vote: mpsc::UnboundedSender<Vote>,
-        inbound_proposal: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx: mpsc::Sender<Transaction>,
+        inbound_block: mpsc::Sender<Block>,
+        inbound_vote: mpsc::Sender<Vote>,
+        inbound_proposal: mpsc::Sender<(u64, u32, Block)>,
+        inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Result<(), NetworkError> {
         // Send Handshake
@@ -449,15 +449,15 @@ impl P2pService {
         hash: Hash32,
         current_height: u64,
         peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
-        inbound_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block: mpsc::UnboundedSender<Block>,
-        inbound_vote: mpsc::UnboundedSender<Vote>,
-        inbound_proposal: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx: mpsc::Sender<Transaction>,
+        inbound_block: mpsc::Sender<Block>,
+        inbound_vote: mpsc::Sender<Vote>,
+        inbound_proposal: mpsc::Sender<(u64, u32, Block)>,
+        inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Result<(), NetworkError> {
         let (mut reader, mut writer) = stream.into_split();
-        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<NetworkMessage>();
+        let (outbound_tx, mut outbound_rx) = mpsc::channel::<NetworkMessage>(8);
 
         let handle = PeerHandle {
             peer_id: remote_id.clone(),
@@ -473,7 +473,7 @@ impl P2pService {
 
         // Catch-up on connect: if this peer is ahead of us, ask for the blocks we're missing.
         if height > current_height {
-            let _ = outbound_tx.send(NetworkMessage::GetBlocksRequest {
+            let _ = outbound_tx.try_send(NetworkMessage::GetBlocksRequest {
                 from_height: current_height + 1,
                 to_height: height,
             });
@@ -511,38 +511,54 @@ impl P2pService {
                 if let Ok(msg) = NetworkMessage::decode(&buf) {
                     match msg {
                         NetworkMessage::TxGossip(tx) => {
-                            let _ = inbound_tx.send(tx);
+                            let _ = inbound_tx.try_send(tx);
                         }
                         NetworkMessage::BlockGossip(block) => {
-                            let _ = inbound_block.send(block);
+                            let _ = inbound_block.try_send(block);
                         }
                         NetworkMessage::Ping { nonce } => {
                             let pong = NetworkMessage::Pong { nonce };
                             let _ = p_clone.read().get(&r_id).map(|p| p.send(pong));
                         }
                         NetworkMessage::Vote(vote) => {
-                            let _ = inbound_vote.send(vote);
+                            let _ = inbound_vote.try_send(vote);
                         }
                         NetworkMessage::Proposal {
                             height,
                             round,
                             block,
                         } => {
-                            let _ = inbound_proposal.send((height, round, block));
+                            let _ = inbound_proposal.try_send((height, round, block));
                         }
                         NetworkMessage::Evidence(evidence) => {
-                            let _ = inbound_evidence.send(evidence);
+                            let _ = inbound_evidence.try_send(evidence);
                         }
                         NetworkMessage::GetBlocksRequest {
                             from_height,
                             to_height,
                         } => {
-                            let blocks = block_fetch_fn(from_height, to_height);
-                            let _ = outbound_tx.send(NetworkMessage::GetBlocksResponse { blocks });
+                            // Serve one block per page; an untrusted range cannot allocate the archive.
+                            let blocks = if from_height <= to_height {
+                                block_fetch_fn(from_height, from_height)
+                            } else {
+                                Vec::new()
+                            };
+                            let _ =
+                                outbound_tx.try_send(NetworkMessage::GetBlocksResponse { blocks });
                         }
                         NetworkMessage::GetBlocksResponse { blocks } => {
+                            let last_height = blocks.last().map(|block| block.header.height);
                             for b in blocks {
-                                let _ = inbound_block.send(b);
+                                // Apply backpressure so catch-up never drops a required predecessor.
+                                if inbound_block.send(b).await.is_err() {
+                                    break;
+                                }
+                            }
+                            if let Some(last) = last_height.filter(|last| *last < height) {
+                                let _ = outbound_tx.try_send(NetworkMessage::GetBlocksRequest {
+                                    from_height: last + 1,
+                                    to_height: height,
+                                });
                             }
                         }
                         NetworkMessage::PeerDiscoveryRequest => {
@@ -551,8 +567,9 @@ impl P2pService {
                                 .values()
                                 .map(|p| p.remote_addr.to_string())
                                 .collect();
-                            let _ = outbound_tx
-                                .send(NetworkMessage::PeerDiscoveryResponse { peers: known_peers });
+                            let _ = outbound_tx.try_send(NetworkMessage::PeerDiscoveryResponse {
+                                peers: known_peers,
+                            });
                         }
                         NetworkMessage::PeerDiscoveryResponse { peers: discovered } => {
                             info!(count = discovered.len(), "Received peer discovery list");

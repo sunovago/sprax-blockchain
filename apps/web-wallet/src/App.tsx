@@ -12,13 +12,14 @@ import { WalletOnboarding } from "./components/WalletOnboarding";
 import { SendModal } from "./components/SendModal";
 import { ReceiveModal } from "./components/ReceiveModal";
 import { WalletUnlock } from "./components/WalletUnlock";
+import { VaultBackup } from "./components/VaultBackup";
 import { loadVault, saveVault, VAULT_STORAGE_KEY } from "./vaultStorage";
 
 export const App: React.FC = () => {
   const [network, setNetwork] = useState<NetworkConfig>(NETWORKS.local);
   const [account, setAccount] = useState<Account | null>(null);
   const [privateKey, setPrivateKey] = useState<Uint8Array | null>(null);
-  const [stored] = useState(() => {
+  const [stored, setStored] = useState(() => {
     try { return { vault: loadVault(localStorage), error: "" }; }
     catch { return { vault: null, error: "The saved wallet could not be read. Keep your browser data and recover from your encrypted backup or recovery phrase." }; }
   });
@@ -182,6 +183,13 @@ export const App: React.FC = () => {
           />
         )}
       </main>
+
+      <VaultBackup vault={vault} onImport={(backup) => {
+        saveVault(localStorage, backup);
+        handleLockWallet();
+        setVault(backup);
+        setStored({ vault: backup, error: "" });
+      }} />
 
       {isSendOpen && account && privateKey && (
         <SendModal

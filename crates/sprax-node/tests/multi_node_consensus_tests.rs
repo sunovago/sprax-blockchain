@@ -257,11 +257,11 @@ async fn test_double_sign_triggers_real_slashing_across_network() {
     let charlie_addr = charlie_kp.address();
 
     let attacker_peer_id = PeerId::from_pubkey_hash(&Hasher::blake3(b"byzantine-attacker"));
-    let (junk_tx_tx, _junk_tx_rx) = mpsc::unbounded_channel();
-    let (junk_block_tx, _junk_block_rx) = mpsc::unbounded_channel();
-    let (junk_vote_tx, _junk_vote_rx) = mpsc::unbounded_channel();
-    let (junk_proposal_tx, _junk_proposal_rx) = mpsc::unbounded_channel();
-    let (junk_evidence_tx, _junk_evidence_rx) = mpsc::unbounded_channel();
+    let (junk_tx_tx, _junk_tx_rx) = mpsc::channel(128);
+    let (junk_block_tx, _junk_block_rx) = mpsc::channel(128);
+    let (junk_vote_tx, _junk_vote_rx) = mpsc::channel(128);
+    let (junk_proposal_tx, _junk_proposal_rx) = mpsc::channel(128);
+    let (junk_evidence_tx, _junk_evidence_rx) = mpsc::channel(128);
     let fetch_fn: BlockFetchFn = Arc::new(|_, _| vec![]);
     let attacker = P2pService::new(
         attacker_peer_id,
