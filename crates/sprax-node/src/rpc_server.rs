@@ -76,7 +76,7 @@ impl JsonRpcResponse {
 pub struct RpcServer;
 
 impl RpcServer {
-    pub async fn start(node: NodeService, port: u16) -> Result<(), NodeError> {
+    fn router(node: NodeService) -> Router {
         let state = Arc::new(RpcServerState { node });
 
         let cors = CorsLayer::new()
@@ -88,7 +88,7 @@ impl RpcServer {
                 header::ACCEPT,
             ]);
 
-        let app = Router::new()
+        Router::new()
             // JSON-RPC entry points
             .route("/", post(handle_json_rpc))
             .route("/rpc", post(handle_json_rpc))
@@ -102,7 +102,11 @@ impl RpcServer {
             .route("/blocks/latest", get(handle_rest_latest_block))
             .route("/blocks/:height_or_hash", get(handle_rest_get_block))
             .layer(cors)
-            .with_state(state);
+            .with_state(state)
+    }
+
+    pub async fn start(node: NodeService, port: u16) -> Result<(), NodeError> {
+        let app = Self::router(node);
 
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
@@ -830,6 +834,72 @@ fn parse_bytes_field(val: Option<&Value>) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn wallet_rest_routes_accept_sdk_envelopes_and_report_atomic_balances() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/wallet-transactions.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let tx = parse_transaction(fixture["signed"].clone()).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let mut genesis = sprax_core::GenesisConfig::default_development();
+            genesis.accounts.push(sprax_core::GenesisAccount {
+                name: "SDK sender".into(),
+                address: tx.body.sender,
+                initial_balance: Amount::from_sprx_whole(10).unwrap(),
+            });
+            genesis
+                .save_to_file(&dir.path().join("genesis.json"))
+                .unwrap();
+            let node = NodeService::new_or_load(dir.path().to_path_buf()).unwrap();
+            let router = RpcServer::router(node.clone());
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/txs/broadcast")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&fixture["signed"]).unwrap(),
+                ))
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let accepted: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(accepted["success"], true);
+            node.mine_block(Address::ZERO).unwrap();
+            let receiver = match tx.body.messages[0] {
+                TxMessage::Transfer { to, .. } => to,
+                _ => panic!("transfer fixture"),
+            };
+            let request = axum::http::Request::builder()
+                .uri(format!("/accounts/{receiver}/balance"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let balance: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(balance["balance_atto"], "1000000000000000001");
+            let request = axum::http::Request::builder()
+                .uri(format!("/txs/{}", accepted["tx_hash"].as_str().unwrap()))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = router.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 16384)
+                .await
+                .unwrap();
+            let receipt: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(receipt["receipt"]["success"], true);
+        }
+    }
 
     #[test]
     fn wallet_sdk_signatures_execute_on_the_rust_ledger() {

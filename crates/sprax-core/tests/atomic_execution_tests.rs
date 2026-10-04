@@ -33,6 +33,48 @@ fn signed(key: &Ed25519Keypair, messages: Vec<TxMessage>) -> Transaction {
 }
 
 #[test]
+fn mempool_capacity_failure_preserves_chain_and_pending_transactions() {
+    let mut genesis = GenesisConfig::default_development();
+    let keys: Vec<_> = (0..129).map(|_| Ed25519Keypair::generate()).collect();
+    for key in &keys {
+        genesis.accounts.push(sprax_core::GenesisAccount {
+            name: "capacity test".into(),
+            address: key.address(),
+            initial_balance: Amount::from_sprx_whole(1).unwrap(),
+        });
+    }
+    let mut ledger = ChainLedger::init_from_genesis(genesis).unwrap();
+    let root = ledger.state_root().unwrap();
+    for key in &keys[..128] {
+        ledger
+            .submit_transaction(signed(
+                key,
+                vec![TxMessage::Transfer {
+                    to: Address::ZERO,
+                    amount: Amount::from_atto(1),
+                }],
+            ))
+            .unwrap();
+    }
+    assert_eq!(ledger.mempool_len(), 128);
+    let rejected = signed(
+        &keys[128],
+        vec![TxMessage::Transfer {
+            to: Address::ZERO,
+            amount: Amount::from_atto(1),
+        }],
+    );
+    assert!(ledger
+        .submit_transaction(rejected)
+        .unwrap_err()
+        .to_string()
+        .contains("mempool is full"));
+    assert_eq!(ledger.mempool_len(), 128);
+    assert_eq!(ledger.height(), 0);
+    assert_eq!(ledger.state_root().unwrap(), root);
+}
+
+#[test]
 fn rejected_block_preserves_state_indexes_height_and_mempool() {
     let (genesis, key) = fixture();
     let store = MemKVStore::new();
