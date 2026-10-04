@@ -78,6 +78,44 @@ impl CosmWasmRuntime {
         if code.len() > MAX_WASM_BYTES || !code.starts_with(b"\0asm\x01\0\0\0") {
             return Err("invalid or oversized WASM module".into());
         }
+        let mut exports = std::collections::HashSet::new();
+        for payload in wasmparser::Parser::new(0).parse_all(code) {
+            match payload.map_err(|e| e.to_string())? {
+                wasmparser::Payload::ExportSection(section) => {
+                    for export in section {
+                        let export = export.map_err(|e| e.to_string())?;
+                        exports.insert(export.name.to_owned());
+                    }
+                }
+                wasmparser::Payload::StartSection { .. } => {
+                    return Err("WASM start functions are forbidden".into())
+                }
+                wasmparser::Payload::MemorySection(section) => {
+                    for memory in section {
+                        let memory = memory.map_err(|e| e.to_string())?;
+                        if memory.memory64 || memory.shared || memory.initial > 1024 {
+                            return Err(
+                                "WASM memory exceeds the supported execution profile".into()
+                            );
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+        for required in [
+            "allocate",
+            "deallocate",
+            "interface_version_8",
+            "memory",
+            "instantiate",
+            "execute",
+            "query",
+        ] {
+            if !exports.contains(required) {
+                return Err(format!("missing CosmWasm export: {required}"));
+            }
+        }
         let charge = (code.len() as u64)
             .checked_mul(10)
             .ok_or("upload gas overflow")?;
@@ -153,7 +191,7 @@ impl CosmWasmRuntime {
         })
     }
     fn result<S: KVStore + Clone + 'static>(
-        instance: &ChainInstance<S>,
+        instance: &mut ChainInstance<S>,
         response: Response<Empty>,
     ) -> Result<RuntimeResult, String> {
         if !response.messages.is_empty() {
@@ -196,7 +234,7 @@ impl CosmWasmRuntime {
         .map_err(|e| e.to_string())?
         .into_result()
         .map_err(|e| e.to_string())?;
-        let result = Self::result(&instance, response)?;
+        let result = Self::result(&mut instance, response)?;
         let bytes = serde_json::to_vec(&RuntimeContractInfo {
             code_id,
             creator: context.sender,
@@ -229,7 +267,7 @@ impl CosmWasmRuntime {
         .map_err(|e| e.to_string())?
         .into_result()
         .map_err(|e| e.to_string())?;
-        Self::result(&instance, response)
+        Self::result(&mut instance, response)
     }
     pub fn query<S: KVStore + Clone + 'static>(
         &self,
