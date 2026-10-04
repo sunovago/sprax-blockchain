@@ -1,57 +1,43 @@
-# SPRX Protocol: Wallet Security & Threat Model
-**Document Version:** 1.0.0  
-**Target:** Client Security, Key Isolation, Zero-Leakage Assurances
+# Browser wallet persistence and recovery
 
----
+The browser stores an AES-256-GCM encrypted recovery phrase and public account metadata
+under `sprax.wallet.encrypted-vault.v1`. Passwords, plaintext recovery phrases and private
+keys are not written to storage. New vaults use WebCrypto PBKDF2-HMAC-SHA256 with 600,000
+rounds, a random 16-byte salt and 12-byte IV. The older 100,000-round version 1 format
+remains readable. Invalid encoding, unsupported versions and unbounded KDF counts fail
+before decryption. HTTPS or localhost with secure WebCrypto is required.
 
-## 1. Core Security Commandments
+Reload opens the saved wallet locked. Wrong passwords leave it locked. Locking clears
+the retained private-key byte array, account display and send/receive dialogs. Tab hiding,
+page navigation and five minutes without interaction lock the wallet. The UI discards
+async unlock work when the session changes. JavaScript strings and browser-engine copies
+cannot be reliably zeroized; this is not a hardware wallet or independent audit assurance.
 
-In all SPRX wallet client implementations, the following security constraints are non-negotiable and strictly enforced:
+Use **Download encrypted wallet backup** to save the vault. A browser with no saved vault
+can restore the file and unlock it with the existing password. Keep an offline recovery
+phrase backup separately. Corrupted browser data is preserved and blocks new onboarding
+instead of being silently overwritten. Importing a backup into this recovery screen
+replaces that unreadable entry. Import does not accept plaintext keys or seed files.
 
-1. **Zero Backend Transmission**: Private keys, seed phrases, and derived secrets **never** leave the client device.
-2. **Zero Plaintext Persistence**: Private keys are never written to disk, databases, or storage without AES-256-GCM encryption.
-3. **Zero Telemetry/Analytics Leakage**: Logging frameworks and crash reporters (e.g. Sentry, Firebase Crashlytics) are scrubbed of all keystore data and user input.
-4. **Offline Signing Model**: The client signs transactions strictly locally before transmitting the immutable signed payload.
-5. **Memory Zeroing**: Sensitive byte buffers (`Uint8Array`) are cleared and zeroized immediately after signature computation.
+## Chain interoperability change
 
----
+The earlier SDK used SHA-256 for addresses, while Rust authenticates BLAKE3-derived
+addresses. It also produced incompatible sign bytes. The SDK now uses the node's address
+hash and Rust's exact transaction field order, Bech32 addresses and `priority_fee` field.
+Ed25519 and Secp256k1 transfer fixtures are regenerated from TypeScript and executed by
+Rust tests. REST balance responses contain integer atto-SPRX, never a formatted SPRX string.
 
-## 2. Threat Modeling & Defense Strategies
+The same recovery phrase/private key may therefore display a different address from an
+earlier SDK build. Do not treat cached old addresses as signing identities or send funds
+to them. Any funds deliberately assigned to a legacy SHA-256 address need an explicit,
+reviewed chain migration; this code does not move or silently recover them.
 
-```mermaid
-graph TD
-    A[Threat Vectors] --> B[Man-in-the-Middle (MitM)]
-    A --> C[Device Compromise / Theft]
-    A --> D[Malicious Browser Extensions]
-    A --> E[Phishing & Clipboard Hijacking]
-    
-    B --> F[Offline Client Signing + TLS Verification]
-    C --> G[AES-256-GCM Vault + Android Keystore + PBKDF2 100k]
-    D --> H[Strict CSP + Isolated WebWorker Context]
-    E --> I[Checksummed Bech32 Addresses + Visual Identicons]
-```
+The current derivation algorithm is SPRX-specific. Its displayed paths do not establish
+BIP-44/SLIP-0010/BIP-32 interoperability with other wallets. Keep the SDK revision with
+recovery documentation. Standard derivation with a versioned migration remains work.
 
-### 2.1 Threat 1: Man-in-the-Middle (MitM) RPC Interception
-- **Vector**: An attacker intercepts network requests to modify transaction parameters (e.g. changing recipient address or amount).
-- **Defense**: The client signs a canonical JSON payload containing `chain_id`, `sender`, `nonce`, `to`, `amount`, and `fee`. Any downstream alteration invalidates the Ed25519 signature, causing the node's `TxExecutor` to reject the transaction immediately.
-
-### 2.2 Threat 2: Physical Device Theft / Storage Extraction
-- **Vector**: An attacker gains physical access to the device file system to extract keys.
-- **Defense**:
-  - **Android**: Protected by hardware-backed TEE / SE (Trusted Execution Environment / Secure Element) via the Android Keystore system.
-  - **Web**: Keystore files are encrypted with AES-256-GCM using keys derived via PBKDF2 (100,000 rounds) from high-entropy user passwords.
-
-### 2.3 Threat 3: Clipboard Hijacking (Address Replacement)
-- **Vector**: Malware replaces copied cryptocurrency addresses in the operating system clipboard.
-- **Defense**:
-  - Bech32 error-detecting checksums detect accidental or malicious single-character modifications.
-  - Confirmation modals display formatted starting (`sprax1sdtp...`) and trailing (`...380gr`) segments with visual color accents.
-
----
-
-## 3. Seed Phrase Backup & Verification Protocol
-
-1. **Warning Phase**: The user is educated on non-custodial responsibility (loss of seed phrase = permanent loss of funds).
-2. **Deterministic Generation**: Generated using CSPRNG (`crypto.getRandomValues`) with 128-bit (12 words) or 256-bit (24 words) entropy.
-3. **Interactive Verification Quiz**: To prevent blind skipping, the wallet prompts the user to verify randomly selected words (e.g. "Enter word #4 and word #9") before unlocking wallet features.
-4. **Zero Cloud Backup**: Disables automatic Google Drive / iCloud backups for sensitive vault storage directories.
+RPC failures are shown as failures, rather than guessed zero balances/nonces or successful
+receipts. Fiat quotes remain unavailable without a real price source. Named public
+network endpoints in the SDK are configuration values, not evidence of a live mainnet.
+Deployment, CSP/RPC hardening, browser end-to-end tests and independent security review
+remain launch gates.

@@ -39,6 +39,10 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
     let mut wrong_genesis = proposal;
     wrong_genesis.genesis = Hash32::ZERO;
     assert!(reopened.sign_proposal(wrong_genesis, &signer).is_err());
+    let old_vote = Vote::new(VoteType::Prevote, 1, 1, None, signer.address(), Vec::new());
+    assert!(reopened.sign(old_vote, &signer).is_err());
+    let current_vote = Vote::new(VoteType::Prevote, 1, 2, None, signer.address(), Vec::new());
+    reopened.sign(current_vote, &signer).unwrap();
 }
 use sprax_crypto::Ed25519Keypair;
 use sprax_node::signing_journal::SigningJournal;

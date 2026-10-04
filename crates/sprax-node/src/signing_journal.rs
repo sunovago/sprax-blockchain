@@ -141,7 +141,7 @@ impl SigningJournal {
                 .map(|value| serde_json::from_slice(value.value()).map_err(|e| e.to_string()))
                 .transpose()?;
             if let Some(state) = state {
-                if position(&proposal) < (state.vote.height, state.vote.round) {
+                if position(&proposal) <= (state.vote.height, state.vote.round) {
                     return Err("proposal predates signed vote".into());
                 }
                 if proposal.block.header.height == state.vote.height
@@ -176,6 +176,16 @@ impl SigningJournal {
         let write = self.db.begin_write().map_err(|e| e.to_string())?;
         {
             let mut table = write.open_table(TABLE).map_err(|e| e.to_string())?;
+            let last_proposal: Option<SignedProposal> = table
+                .get("proposal")
+                .map_err(|e| e.to_string())?
+                .map(|value| serde_json::from_slice(value.value()).map_err(|e| e.to_string()))
+                .transpose()?;
+            if last_proposal.is_some_and(|proposal| {
+                (vote.height, vote.round) < (proposal.block.header.height, proposal.round)
+            }) {
+                return Err("vote predates durably signed proposal".into());
+            }
             let previous: Option<SigningState> = table
                 .get("state")
                 .map_err(|e| e.to_string())?

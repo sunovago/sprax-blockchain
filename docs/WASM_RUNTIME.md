@@ -46,9 +46,15 @@ at most two concurrent contract queries.
 
 ## Remaining work
 
+Storage host functions now cap keys at 1 KiB and values at 64 KiB. Scans collect at most
+1,024 records and 1 MiB including scoped keys; oversized ranges fail before copying the
+excess record. Range selection is scoped to the contract in all storage backends and
+overlays. Each instance permits 16 active iterators, with exhausted handles released.
+Contracts must narrow their scan range when a range exceeds the configured limits.
+
 This execution profile rejects chain queries, contract submessages, and nonzero
 attached contract funds until bank submessages can release them. Replies,
-migrations, sudo, IBC, event indexing, compilation caching, resource-bounded storage
+migrations, sudo, IBC, event indexing, compilation caching, paginated storage
 iteration, and broader execution-equivalence/performance testing remain unfinished.
 The VM implementation does not establish overall mainnet readiness; see
 [MAINNET_READINESS.md](MAINNET_READINESS.md).
