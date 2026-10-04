@@ -200,6 +200,15 @@ impl NodeService {
         &self.config
     }
 
+    pub fn override_listen_ports(&mut self, p2p_port: Option<u16>, rpc_port: Option<u16>) {
+        if let Some(port) = p2p_port {
+            self.config.network.p2p_port = port;
+        }
+        if let Some(port) = rpc_port {
+            self.config.rpc.json_rpc_port = port;
+        }
+    }
+
     pub fn override_bootstrap_peers(&mut self, peers: Vec<String>) {
         self.config.network.bootstrap_peers = peers;
     }
@@ -626,6 +635,36 @@ impl NodeService {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn listen_port_overrides_bind_actual_p2p_and_rpc_sockets() {
+        let temp = tempfile::tempdir().unwrap();
+        let first = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let second = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let p2p = first.local_addr().unwrap().port();
+        let rpc = second.local_addr().unwrap().port();
+        drop((first, second));
+        let mut service = NodeService::new_or_load(temp.path().to_path_buf()).unwrap();
+        service.override_listen_ports(Some(p2p), Some(rpc));
+        service.start().await.unwrap();
+        for port in [p2p, rpc] {
+            let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+            loop {
+                if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                    .await
+                    .is_ok()
+                {
+                    break;
+                }
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "overridden port must actually bind"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        }
+        service.stop().await.unwrap();
+    }
 
     #[tokio::test]
     async fn test_node_service_lifecycle() {

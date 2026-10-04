@@ -34,6 +34,7 @@ pub(crate) async fn execute(args: &StartArgs) -> anyhow::Result<()> {
             .collect();
         service.override_bootstrap_peers(bootstrap_peers);
     }
+    service.override_listen_ports(args.p2p_port, args.rpc_port);
     init_telemetry(&service.config().telemetry);
 
     let latest_header = service.latest_header();
@@ -67,11 +68,24 @@ pub(crate) async fn execute(args: &StartArgs) -> anyhow::Result<()> {
 
     service.start().await?;
 
-    // Wait for SIGINT / Ctrl+C
-    tokio::signal::ctrl_c().await?;
+    wait_for_shutdown().await?;
     info!("Shutdown signal received. Saving state snapshot...");
     service.stop().await?;
     println!("\nSPRX Local Blockchain Daemon stopped cleanly.");
 
     Ok(())
+}
+
+async fn wait_for_shutdown() -> std::io::Result<()> {
+    #[cfg(unix)]
+    {
+        use tokio::signal::unix::{signal, SignalKind};
+        let mut terminate = signal(SignalKind::terminate())?;
+        tokio::select! {
+            result = tokio::signal::ctrl_c() => result,
+            _ = terminate.recv() => Ok(()),
+        }
+    }
+    #[cfg(not(unix))]
+    tokio::signal::ctrl_c().await
 }

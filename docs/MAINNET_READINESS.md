@@ -43,6 +43,12 @@ Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 
   self-asserted; authenticated transport identity still needs implementation.
 - P2P shutdown cancels listener waits, pending handshakes and active connections. Stop
   generations survive rapid restarts; failed listener binds reset the running state.
+- CLI testnet/mainnet initialization requires a validated explicit genesis and rejects public
+  development validator keys. Unknown environments, chain-ID mismatches and nonempty node
+  homes fail before writes. Non-development initialization creates no development keys and
+  leaves signing disabled until operator configuration. CLI port overrides affect listeners.
+  Containers quote argument arrays and require explicit non-development initialization;
+  the daemon handles both SIGINT and SIGTERM for shutdown.
 - The browser wallet persists only an encrypted vault, supports unlock and encrypted backups,
   and locks on tab hide or five minutes of inactivity. SDK address hashing, canonical
   transaction signing, and REST address/balance handling match the Rust node. Both Ed25519

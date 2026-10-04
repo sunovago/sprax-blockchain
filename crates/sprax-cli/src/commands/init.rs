@@ -1,5 +1,5 @@
 use clap::Args;
-use sprax_core::{GenesisAccount, GenesisConfig, GenesisValidator};
+use sprax_core::{ChainLedger, GenesisAccount, GenesisConfig, GenesisValidator};
 use sprax_crypto::Ed25519Keypair;
 use sprax_node::{Environment, Keyring, NodeConfig};
 use sprax_types::Amount;
@@ -7,104 +7,163 @@ use std::path::PathBuf;
 
 #[derive(Debug, Args)]
 pub(crate) struct InitArgs {
-    /// Chain ID for the new network
-    #[arg(long, default_value = "sprax-devnet-1")]
-    pub(crate) chain_id: String,
-
+    /// Chain ID; defaults to the supplied genesis or development chain ID
+    #[arg(long)]
+    pub(crate) chain_id: Option<String>,
     /// Target environment (development, testnet, mainnet)
     #[arg(long, default_value = "development")]
     pub(crate) env: String,
-
-    /// Node home directory
+    /// Node home directory; must be empty or absent
     #[arg(long, default_value = ".sprx")]
     pub(crate) home: PathBuf,
+    /// Agreed genesis JSON; required for testnet and mainnet
+    #[arg(long)]
+    pub(crate) genesis: Option<PathBuf>,
 }
 
 pub(crate) fn execute(args: &InitArgs) -> anyhow::Result<()> {
     let env = match args.env.to_lowercase().as_str() {
-        "mainnet" => Environment::Mainnet,
+        "development" => Environment::Development,
         "testnet" => Environment::Testnet,
-        _ => Environment::Development,
+        "mainnet" => Environment::Mainnet,
+        other => anyhow::bail!("unknown environment: {other}"),
     };
-
+    if args.home.exists() && args.home.read_dir()?.next().is_some() {
+        anyhow::bail!("node home is not empty; initialization must not overwrite configuration, genesis or signing state");
+    }
+    let default_development = args.genesis.is_none() && env == Environment::Development;
+    let mut genesis = match &args.genesis {
+        Some(path) => GenesisConfig::load_from_file(path)?,
+        None if default_development => development_genesis()?,
+        None => anyhow::bail!(
+            "testnet/mainnet initialization requires --genesis with the agreed public genesis JSON"
+        ),
+    };
+    if let Some(chain_id) = &args.chain_id {
+        if default_development {
+            genesis.chain_id = chain_id.clone();
+        } else if &genesis.chain_id != chain_id {
+            anyhow::bail!("--chain-id does not match the supplied genesis");
+        }
+    }
+    if env != Environment::Development {
+        if genesis.validators.is_empty() {
+            anyhow::bail!("non-development genesis requires validators");
+        }
+        for seed in 1..=3 {
+            let key = Ed25519Keypair::from_seed(&[seed; 32]);
+            if genesis
+                .validators
+                .iter()
+                .any(|v| v.consensus_pubkey == key.public_key_bytes())
+            {
+                anyhow::bail!(
+                    "non-development genesis contains a public development validator key"
+                );
+            }
+        }
+    }
+    // Validate all accounting and identity invariants before writing any home files.
+    ChainLedger::init_from_genesis(genesis.clone())?;
     let mut config = NodeConfig::for_environment(env, args.home.clone());
-    config.chain_id = args.chain_id.clone();
-    // Single-node devnet: alice is the sole genesis validator (see below), so she alone
-    // signs and drives the BFT consensus loop for this local chain.
-    config.consensus.enabled = true;
-    config.consensus.local_validator_key_name = Some("alice".to_string());
-
-    let config_file_path = args.home.join("config.toml");
-    config.save_to_file(&config_file_path)?;
-
-    // Initialize local development keyring
-    let keyring_dir = args.home.join("keyring");
-    let mut keyring = Keyring::open_or_create(&keyring_dir)?;
-    keyring.init_default_dev_keys()?;
-    keyring.save()?;
-
-    // Initialize Genesis configuration with accounts matching keyring
-    let alice_kp = Ed25519Keypair::from_seed(&[1u8; 32]);
-    let bob_kp = Ed25519Keypair::from_seed(&[2u8; 32]);
-    let charlie_kp = Ed25519Keypair::from_seed(&[3u8; 32]);
-    let alice_addr = alice_kp.address();
-    let bob_addr = bob_kp.address();
-    let charlie_addr = charlie_kp.address();
-
-    let mut genesis = GenesisConfig::default_development();
-    genesis.chain_id = args.chain_id.clone();
-    genesis.accounts = vec![
-        GenesisAccount {
-            name: "alice".to_string(),
-            address: alice_addr,
-            initial_balance: Amount::from_sprx_whole(1_000_000).unwrap(),
-        },
-        GenesisAccount {
-            name: "bob".to_string(),
-            address: bob_addr,
-            initial_balance: Amount::from_sprx_whole(500_000).unwrap(),
-        },
-        GenesisAccount {
-            name: "charlie".to_string(),
-            address: charlie_addr,
-            initial_balance: Amount::from_sprx_whole(100_000).unwrap(),
-        },
-    ];
-    // Alice is registered as the sole genesis validator (100% voting power) so this
-    // single-node devnet has quorum by itself and finalizes blocks on `sprax start`
-    // without needing peer nodes. Bob and charlie remain funded accounts for tx testing.
-    genesis.validators = vec![GenesisValidator {
-        operator_address: alice_addr,
-        consensus_pubkey: alice_kp.public_key_bytes().to_vec(),
-        self_stake: Amount::from_sprx_whole(100_000).unwrap(),
-        moniker: "alice".to_string(),
-    }];
-
-    let genesis_file_path = args.home.join("genesis.json");
-    genesis.save_to_file(&genesis_file_path)?;
-
-    // Initialize empty data directory
+    config.chain_id = genesis.chain_id.clone();
+    if default_development {
+        config.consensus.enabled = true;
+        config.consensus.local_validator_key_name = Some("alice".into());
+    }
+    let config_file = args.home.join("config.toml");
+    let genesis_file = args.home.join("genesis.json");
+    config.save_to_file(&config_file)?;
+    genesis.save_to_file(&genesis_file)?;
+    Keyring::open_or_create_with_development_keys(&args.home.join("keyring"), default_development)?
+        .save()?;
     std::fs::create_dir_all(args.home.join("data"))?;
-
-    println!("============================================================");
-    println!("  SPRX Local Blockchain Initialized Successfully");
-    println!("============================================================");
-    println!("  Home Directory : {:?}", args.home);
-    println!("  Chain ID       : {}", config.chain_id);
-    println!("  Environment    : {}", config.environment);
-    println!("  Config File    : {config_file_path:?}");
-    println!("  Genesis File   : {genesis_file_path:?}");
-    println!("  Keyring Dir    : {keyring_dir:?}");
-    println!("------------------------------------------------------------");
-    println!("  Pre-Funded Development Accounts:");
-    println!("  - alice   : {alice_addr} (1,000,000.00 SPRX)");
-    println!("  - bob     : {bob_addr} (  500,000.00 SPRX)");
-    println!("  - charlie : {charlie_addr} (  100,000.00 SPRX)");
-    println!("============================================================");
     println!(
-        "  Run 'sprax start --home {:?}' to launch the local chain.",
-        args.home
+        "Initialized {} node at {:?} (chain {})",
+        env, args.home, config.chain_id
     );
-
+    if !default_development {
+        println!("Consensus signing is disabled. Configure the operator key and consensus settings before validator startup.");
+    }
     Ok(())
+}
+
+fn development_genesis() -> anyhow::Result<GenesisConfig> {
+    let mut genesis = GenesisConfig::default_development();
+    genesis.accounts = [
+        (1, "alice", 1_000_000),
+        (2, "bob", 500_000),
+        (3, "charlie", 100_000),
+    ]
+    .into_iter()
+    .map(|(seed, name, balance)| {
+        Ok(GenesisAccount {
+            name: name.into(),
+            address: Ed25519Keypair::from_seed(&[seed; 32]).address(),
+            initial_balance: Amount::from_sprx_whole(balance)?,
+        })
+    })
+    .collect::<anyhow::Result<_>>()?;
+    let alice = Ed25519Keypair::from_seed(&[1; 32]);
+    genesis.validators = vec![GenesisValidator {
+        operator_address: alice.address(),
+        consensus_pubkey: alice.public_key_bytes().to_vec(),
+        self_stake: Amount::from_sprx_whole(100_000)?,
+        moniker: "alice".into(),
+    }];
+    Ok(genesis)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    fn args(env: &str) -> InitArgs {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos();
+        InitArgs {
+            chain_id: None,
+            env: env.into(),
+            home: std::env::temp_dir().join(format!("sprax-init-{}-{unique}", std::process::id())),
+            genesis: None,
+        }
+    }
+    #[test]
+    fn rejects_unknown_environment_and_missing_public_genesis_before_writes() {
+        for env in ["maninet", "mainnet", "testnet"] {
+            let a = args(env);
+            assert!(execute(&a).is_err());
+            assert!(!a.home.exists());
+        }
+    }
+    #[test]
+    fn refuses_to_overwrite_existing_node_home() {
+        let a = args("development");
+        std::fs::create_dir_all(&a.home).unwrap();
+        let marker = a.home.join("validator-signing.redb");
+        std::fs::write(&marker, b"preserve signing state").unwrap();
+        assert!(execute(&a).is_err());
+        assert_eq!(std::fs::read(marker).unwrap(), b"preserve signing state");
+        assert!(!a.home.join("config.toml").exists());
+        std::fs::remove_dir_all(a.home).unwrap();
+    }
+    #[test]
+    fn nondevelopment_init_rejects_public_dev_keys_and_chain_mismatch() {
+        let mut a = args("mainnet");
+        let input = a.home.with_extension("genesis.json");
+        development_genesis().unwrap().save_to_file(&input).unwrap();
+        a.genesis = Some(input.clone());
+        assert!(execute(&a)
+            .unwrap_err()
+            .to_string()
+            .contains("public development"));
+        a.chain_id = Some("other-chain".into());
+        assert!(execute(&a)
+            .unwrap_err()
+            .to_string()
+            .contains("does not match"));
+        assert!(!a.home.exists());
+        std::fs::remove_file(input).unwrap();
+    }
 }
