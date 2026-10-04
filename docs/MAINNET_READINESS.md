@@ -40,6 +40,8 @@ Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 
   JSON serialization is bounded by the same limit. Duplicate connected peer IDs are rejected
   without replacing or removing the existing connection routing entry. Peer IDs remain
   self-asserted; authenticated transport identity still needs implementation.
+- P2P shutdown cancels listener waits, pending handshakes and active connections. Stop
+  generations survive rapid restarts; failed listener binds reset the running state.
 - The browser wallet persists only an encrypted vault, supports unlock and encrypted backups,
   and locks on tab hide or five minutes of inactivity. SDK address hashing, canonical
   transaction signing, and REST address/balance handling match the Rust node. Both Ed25519

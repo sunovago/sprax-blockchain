@@ -19,7 +19,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
+    sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::{debug, info, warn};
 
@@ -55,6 +55,7 @@ pub struct P2pService {
     peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
     known_addresses: Arc<RwLock<HashSet<String>>>,
     is_running: Arc<AtomicBool>,
+    shutdown: watch::Sender<u64>,
     inbound_tx_tx: mpsc::Sender<Transaction>,
     inbound_block_tx: mpsc::Sender<Block>,
     inbound_vote_tx: mpsc::Sender<Vote>,
@@ -102,6 +103,7 @@ impl P2pService {
             peers: Arc::new(RwLock::new(HashMap::new())),
             known_addresses: Arc::new(RwLock::new(known)),
             is_running: Arc::new(AtomicBool::new(false)),
+            shutdown: watch::channel(0).0,
             inbound_tx_tx,
             inbound_block_tx,
             inbound_vote_tx,
@@ -210,6 +212,7 @@ impl P2pService {
             self.inbound_evidence_tx.clone(),
             Arc::clone(&self.block_fetch_fn),
             self.config.max_message_size_bytes,
+            ShutdownSignal::new(&self.shutdown),
             slot,
         )
         .await
@@ -226,11 +229,15 @@ impl P2pService {
         }
 
         let listen_addr = format!("{}:{}", self.config.listen_addr, self.config.p2p_port);
-        let listener = TcpListener::bind(&listen_addr).await.map_err(|e| {
-            NetworkError::ConnectionFailed(format!(
-                "failed to bind TCP listener on {listen_addr}: {e}"
-            ))
-        })?;
+        let listener = match TcpListener::bind(&listen_addr).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                self.is_running.store(false, Ordering::SeqCst);
+                return Err(NetworkError::ConnectionFailed(format!(
+                    "failed to bind TCP listener on {listen_addr}: {error}"
+                )));
+            }
+        };
 
         info!(
             peer_id = %self.local_peer_id,
@@ -251,11 +258,17 @@ impl P2pService {
         let fetch_fn = Arc::clone(&self.block_fetch_fn);
         let inbound_slots = Arc::clone(&self.inbound_slots);
         let max_message_size = self.config.max_message_size_bytes;
+        let mut shutdown = ShutdownSignal::new(&self.shutdown);
 
         // Spawn Inbound TCP Listener Loop
         tokio::spawn(async move {
             while is_running.load(Ordering::SeqCst) {
-                match listener.accept().await {
+                let accepted = tokio::select! {
+                    biased;
+                    _ = wait_for_shutdown(&mut shutdown) => break,
+                    result = listener.accept() => result,
+                };
+                match accepted {
                     Ok((stream, remote_addr)) => {
                         let Ok(slot) = Arc::clone(&inbound_slots).try_acquire_owned() else {
                             drop(stream);
@@ -273,9 +286,10 @@ impl P2pService {
                         let evidence_in = evidence_in.clone();
                         let fetch_fn = Arc::clone(&fetch_fn);
 
+                        let mut connection_shutdown = shutdown.clone();
                         tokio::spawn(async move {
                             let _connection_slot = slot;
-                            if let Err(e) = Self::handle_inbound_connection(
+                            let connection = Self::handle_inbound_connection(
                                 stream,
                                 l_id,
                                 c_id,
@@ -290,10 +304,14 @@ impl P2pService {
                                 evidence_in,
                                 fetch_fn,
                                 max_message_size,
-                            )
-                            .await
-                            {
-                                debug!("Inbound connection closed: {e}");
+                                connection_shutdown.clone(),
+                            );
+                            tokio::select! {
+                                biased;
+                                _ = wait_for_shutdown(&mut connection_shutdown) => {},
+                                result = connection => {
+                                    if let Err(e) = result { debug!("Inbound connection closed: {e}"); }
+                                }
                             }
                         });
                     }
@@ -316,6 +334,8 @@ impl P2pService {
 
     pub fn stop(&self) {
         self.is_running.store(false, Ordering::SeqCst);
+        self.shutdown
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
         self.peers.write().clear();
     }
 
@@ -335,6 +355,7 @@ impl P2pService {
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
         max_message_size: usize,
+        shutdown: ShutdownSignal,
     ) -> Result<(), NetworkError> {
         let remote_msg =
             tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
@@ -393,6 +414,7 @@ impl P2pService {
             inbound_evidence,
             block_fetch_fn,
             max_message_size,
+            shutdown,
         )
         .await
     }
@@ -413,41 +435,54 @@ impl P2pService {
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
         max_message_size: usize,
+        mut shutdown: ShutdownSignal,
         slot: OwnedSemaphorePermit,
     ) -> Result<(), NetworkError> {
-        // Send Handshake
-        let handshake = NetworkMessage::Handshake {
-            peer_id: local_id,
-            chain_id: chain_id.clone(),
-            height: current_height,
-            latest_block_hash: latest_hash,
-            listen_addr: None,
-        };
-        Self::write_frame(&mut stream, &handshake).await?;
+        let handshake_work = async {
+            // Send Handshake
+            let handshake = NetworkMessage::Handshake {
+                peer_id: local_id,
+                chain_id: chain_id.clone(),
+                height: current_height,
+                latest_block_hash: latest_hash,
+                listen_addr: None,
+            };
+            Self::write_frame(&mut stream, &handshake).await?;
 
-        // Read HandshakeAck (bounded — an unresponsive peer must not hang the dialer forever)
-        let ack_msg = tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
-            .await
-            .map_err(|_| NetworkError::HandshakeFailed("handshake ack timed out".into()))??;
-        let (remote_id, remote_height, remote_hash) = match ack_msg {
-            NetworkMessage::HandshakeAck {
-                peer_id,
-                chain_id: peer_chain_id,
-                height,
-                latest_block_hash,
-            } => {
-                if peer_chain_id != chain_id {
-                    return Err(NetworkError::HandshakeFailed(format!(
-                        "chain ID mismatch: {peer_chain_id} != {chain_id}"
-                    )));
+            // Read HandshakeAck (bounded — an unresponsive peer must not hang the dialer forever)
+            let ack_msg =
+                tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
+                    .await
+                    .map_err(|_| {
+                        NetworkError::HandshakeFailed("handshake ack timed out".into())
+                    })??;
+            let (remote_id, remote_height, remote_hash) = match ack_msg {
+                NetworkMessage::HandshakeAck {
+                    peer_id,
+                    chain_id: peer_chain_id,
+                    height,
+                    latest_block_hash,
+                } => {
+                    if peer_chain_id != chain_id {
+                        return Err(NetworkError::HandshakeFailed(format!(
+                            "chain ID mismatch: {peer_chain_id} != {chain_id}"
+                        )));
+                    }
+                    (peer_id, height, latest_block_hash)
                 }
-                (peer_id, height, latest_block_hash)
-            }
-            _ => {
-                return Err(NetworkError::HandshakeFailed(
-                    "expected HandshakeAck message".into(),
-                ))
-            }
+                _ => {
+                    return Err(NetworkError::HandshakeFailed(
+                        "expected HandshakeAck message".into(),
+                    ))
+                }
+            };
+
+            Ok::<_, NetworkError>((remote_id, remote_height, remote_hash))
+        };
+        let (remote_id, remote_height, remote_hash) = tokio::select! {
+            biased;
+            _ = wait_for_shutdown(&mut shutdown) => return Err(NetworkError::ConnectionFailed("network stopped".into())),
+            result = handshake_work => result?,
         };
 
         tokio::spawn(async move {
@@ -466,6 +501,7 @@ impl P2pService {
                 inbound_evidence,
                 block_fetch_fn,
                 max_message_size,
+                shutdown,
             )
             .await
         });
@@ -487,6 +523,7 @@ impl P2pService {
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
         max_message_size: usize,
+        mut shutdown: ShutdownSignal,
     ) -> Result<(), NetworkError> {
         let (mut reader, mut writer) = stream.into_split();
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<NetworkMessage>(8);
@@ -535,7 +572,7 @@ impl P2pService {
         });
 
         // Reader loop
-        let read_res = async {
+        let read_work = async {
             loop {
                 let mut len_bytes = [0u8; 4];
                 if reader.read_exact(&mut len_bytes).await.is_err() {
@@ -617,8 +654,12 @@ impl P2pService {
                     }
                 }
             }
+        };
+        tokio::select! {
+            biased;
+            _ = wait_for_shutdown(&mut shutdown) => {},
+            _ = read_work => {},
         }
-        .await;
 
         let mut connected = peers.write();
         if connected
@@ -631,7 +672,7 @@ impl P2pService {
         write_task.abort();
         info!(peer = %remote_id, "P2P Peer disconnected");
 
-        Ok(read_res)
+        Ok(())
     }
 
     async fn write_frame(stream: &mut TcpStream, msg: &NetworkMessage) -> Result<(), NetworkError> {
@@ -661,5 +702,33 @@ impl P2pService {
             .await
             .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
         NetworkMessage::decode(&buf)
+    }
+}
+
+// Stop generations cannot be erased by a quick stop/start sequence. Every old task
+// keeps its original generation even if it first polls after the next start.
+#[derive(Clone)]
+struct ShutdownSignal {
+    receiver: watch::Receiver<u64>,
+    generation: u64,
+}
+impl ShutdownSignal {
+    fn new(sender: &watch::Sender<u64>) -> Self {
+        let receiver = sender.subscribe();
+        let generation = *receiver.borrow();
+        Self {
+            receiver,
+            generation,
+        }
+    }
+}
+async fn wait_for_shutdown(shutdown: &mut ShutdownSignal) {
+    loop {
+        if *shutdown.receiver.borrow_and_update() != shutdown.generation {
+            return;
+        }
+        if shutdown.receiver.changed().await.is_err() {
+            return;
+        }
     }
 }

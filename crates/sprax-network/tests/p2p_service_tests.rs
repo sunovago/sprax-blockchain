@@ -266,3 +266,52 @@ async fn configured_frame_limit_and_duplicate_peer_rejection_over_tcp() {
     }
     service.stop();
 }
+
+#[tokio::test]
+async fn stop_closes_pending_handshakes_active_sockets_and_releases_listener() {
+    use tokio::io::AsyncReadExt;
+    let port = 37_952;
+    let (blocks, _receiver) = mpsc::channel(8);
+    let service = build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            ..Default::default()
+        },
+        blocks,
+        Arc::new(|_, _| Vec::new()),
+    );
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let mut active = raw_handshake(port, "shutdown-peer").await;
+    let mut pending = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    service.stop();
+    for socket in [&mut active, &mut pending] {
+        let mut byte = [0; 1];
+        let result = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut byte))
+            .await
+            .unwrap();
+        assert!(result.is_err() || result.unwrap() == 0);
+    }
+    assert_eq!(service.connected_peers_count(), 0);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let listener = loop {
+        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+            Ok(listener) => break listener,
+            Err(_) => {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "stop must release the listening port"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    };
+    // A failed bind must not leave is_running=true and turn the next start into a no-op.
+    assert!(service.start(0, Hash32::ZERO).await.is_err());
+    drop(listener);
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let _restarted = raw_handshake(port, "restart-peer").await;
+    service.stop();
+}
