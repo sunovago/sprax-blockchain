@@ -286,7 +286,7 @@ impl P2pService {
                         let evidence_in = evidence_in.clone();
                         let fetch_fn = Arc::clone(&fetch_fn);
 
-                        let mut connection_shutdown = shutdown.clone();
+                        let connection_shutdown = shutdown.clone();
                         tokio::spawn(async move {
                             let _connection_slot = slot;
                             let connection = Self::handle_inbound_connection(
@@ -306,12 +306,8 @@ impl P2pService {
                                 max_message_size,
                                 connection_shutdown.clone(),
                             );
-                            tokio::select! {
-                                biased;
-                                _ = wait_for_shutdown(&mut connection_shutdown) => {},
-                                result = connection => {
-                                    if let Err(e) = result { debug!("Inbound connection closed: {e}"); }
-                                }
+                            if let Err(e) = connection.await {
+                                debug!("Inbound connection closed: {e}");
                             }
                         });
                     }
@@ -355,50 +351,58 @@ impl P2pService {
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
         max_message_size: usize,
-        shutdown: ShutdownSignal,
+        mut shutdown: ShutdownSignal,
     ) -> Result<(), NetworkError> {
-        let remote_msg =
-            tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
-                .await
-                .map_err(|_| NetworkError::HandshakeFailed("handshake timed out".into()))??;
-        let (remote_id, remote_height, remote_hash) = match remote_msg {
-            NetworkMessage::Handshake {
-                peer_id,
-                chain_id: peer_chain_id,
-                height,
-                latest_block_hash,
-                listen_addr,
-            } => {
-                if peer_chain_id != chain_id {
-                    return Err(NetworkError::HandshakeFailed(format!(
-                        "chain ID mismatch: {peer_chain_id} != {chain_id}"
-                    )));
-                }
-                if let Some(addr) = listen_addr {
-                    if addr.len() <= 128 && addr.parse::<SocketAddr>().is_ok() {
-                        let mut known = known.write();
-                        if known.len() < 1024 {
-                            known.insert(addr);
+        let handshake_work = async {
+            let remote_msg =
+                tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
+                    .await
+                    .map_err(|_| NetworkError::HandshakeFailed("handshake timed out".into()))??;
+            let (remote_id, remote_height, remote_hash) = match remote_msg {
+                NetworkMessage::Handshake {
+                    peer_id,
+                    chain_id: peer_chain_id,
+                    height,
+                    latest_block_hash,
+                    listen_addr,
+                } => {
+                    if peer_chain_id != chain_id {
+                        return Err(NetworkError::HandshakeFailed(format!(
+                            "chain ID mismatch: {peer_chain_id} != {chain_id}"
+                        )));
+                    }
+                    if let Some(addr) = listen_addr {
+                        if addr.len() <= 128 && addr.parse::<SocketAddr>().is_ok() {
+                            let mut known = known.write();
+                            if known.len() < 1024 {
+                                known.insert(addr);
+                            }
                         }
                     }
+                    (peer_id, height, latest_block_hash)
                 }
-                (peer_id, height, latest_block_hash)
-            }
-            _ => {
-                return Err(NetworkError::HandshakeFailed(
-                    "expected Handshake message".into(),
-                ))
-            }
-        };
+                _ => {
+                    return Err(NetworkError::HandshakeFailed(
+                        "expected Handshake message".into(),
+                    ))
+                }
+            };
 
-        // Send HandshakeAck
-        let ack = NetworkMessage::HandshakeAck {
-            peer_id: local_id.clone(),
-            chain_id: chain_id.clone(),
-            height: current_height,
-            latest_block_hash: latest_hash,
+            // Send HandshakeAck
+            let ack = NetworkMessage::HandshakeAck {
+                peer_id: local_id.clone(),
+                chain_id: chain_id.clone(),
+                height: current_height,
+                latest_block_hash: latest_hash,
+            };
+            Self::write_frame(&mut stream, &ack).await?;
+            Ok::<_, NetworkError>((remote_id, remote_height, remote_hash))
         };
-        Self::write_frame(&mut stream, &ack).await?;
+        let (remote_id, remote_height, remote_hash) = tokio::select! {
+            biased;
+            _ = wait_for_shutdown(&mut shutdown) => return Err(NetworkError::ConnectionFailed("network stopped".into())),
+            result = handshake_work => result?,
+        };
 
         Self::run_connection_loop(
             stream,
@@ -561,12 +565,14 @@ impl P2pService {
         let r_id = remote_id.clone();
 
         // Writer task
-        let write_task = tokio::spawn(async move {
+        let mut write_task = tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
                 if let Ok(framed) = msg.encode_bounded(max_message_size) {
                     if writer.write_all(&framed).await.is_err() {
                         break;
                     }
+                } else {
+                    break;
                 }
             }
         });
@@ -659,6 +665,7 @@ impl P2pService {
             biased;
             _ = wait_for_shutdown(&mut shutdown) => {},
             _ = read_work => {},
+            _ = &mut write_task => {},
         }
 
         let mut connected = peers.write();
