@@ -17,8 +17,11 @@ Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 
   Development nodes with consensus disabled retain explicit local/manual mining support.
 - Consensus locks survive retries at the same height; conflicting proposals receive nil
   prevotes. Full round synchronization and unlocking/liveness still need work.
-- Unsupported messages fail instead of returning successful no-op receipts. ContractCall
-  remains disabled pending actual WASM execution.
+- Unsupported messages fail instead of returning successful no-op receipts.
+- StoreCode, InstantiateContract, and ContractCall use the actual pinned CosmWasm VM,
+  content-addressed code, deterministic addresses, scoped persistent storage, and gas metering.
+  Query RPC and contract CLI commands are implemented. Submessages, chain queries, replies,
+  migrations, and IBC are explicitly unsupported in this execution profile.
 - Expiration, transaction gas, account nonce exhaustion, block gas/size, increasing block
   timestamps, and bounded unique validator voting power are checked.
 - Testnet/mainnet require explicit genesis; known public development validator keys are
@@ -30,13 +33,18 @@ Rust regression tests were added for rejected block rollback, proposal isolation
 unbond failure, unsupported message rejection, nonzero-round commit verification, certificate
 forgery/duplication/replay, and invalid validator sets.
 
-Rust formatting parses the changed sources. Compilation and test execution are NOT verified:
-Windows Application Control blocked Cargo-generated build executables with OS error 4551.
-Run the existing CI or an approved Rust environment before accepting these changes:
+Windows Application Control blocks local Cargo-generated build executables with OS error 4551.
+Verification uses the authorized GitHub Actions Linux environment on
+`codex/mainnet-hardening-20261004`. Earlier core hardening revisions passed all workspace
+tests; the subsequent real WASM extension is undergoing compilation, integration testing,
+and strict lint checks. Follow the final run for the reviewed revision, rather than assuming
+earlier passing results cover later changes.
 
 ```sh
 cargo fmt --all -- --check
-cargo test --workspace --all-features
+cargo build --manifest-path contracts/examples/counter/Cargo.toml --target wasm32-unknown-unknown --release --locked
+export SPRX_TEST_CONTRACT_WASM="$PWD/contracts/examples/counter/target/wasm32-unknown-unknown/release/sprax_counter.wasm"
+cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 ```
 
@@ -47,9 +55,10 @@ verify the chain changes above or a live deployment.
 ## Remaining engineering gates
 
 1. Execute all Rust tests and static checks; fix compilation, behavioral, and network failures.
-2. Implement real CosmWasm execution, persistent content-addressed code and contract state,
-   deterministic addresses, metered queries/execution, CLI/RPC integration, real compiled
-   contract fixtures, restart tests, and cross-node state-root equivalence.
+2. Verify the implemented real CosmWasm slice with the compiled counter fixture, cross-node
+   state-root equivalence, disk restart, failed-write rollback, and gas-exhaustion rollback.
+   Complete the required chain query/submessage/migration capabilities, contract events,
+   resource-bounded iteration, compilation caching, and execution performance testing.
 3. Complete BFT round synchronization, locked proposal handling, authenticated proposals,
    durable signing protection across restarts, commit validation during historical catch-up,
    and deterministic validator-set transitions and slashing. Current staking-cache and
