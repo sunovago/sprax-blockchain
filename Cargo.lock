@@ -2933,6 +2933,7 @@ dependencies = [
  "sprax-storage",
  "sprax-types",
  "sprax-wasm",
+ "tempfile",
  "thiserror 2.0.20",
  "tracing",
 ]

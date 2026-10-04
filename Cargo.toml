@@ -77,9 +77,7 @@ bech32 = "0.11"
 # RocksDB was evaluated but needs cmake+libclang which aren't available in this environment)
 redb = "2.2"
 
-# Smart contract execution: cosmwasm-vm wraps wasmer. As of the 3.x line it no longer exposes a
-# Singlepass/Cranelift backend choice as a Cargo feature (one backend is baked in), so unlike
-# earlier CosmWasm versions there's no cross-platform determinism concern to configure around.
+# Pin the consensus VM version. Cross-platform execution equivalence still requires testing.
 cosmwasm-vm = "=3.0.9"
 cosmwasm-std = "=3.0.9"
 

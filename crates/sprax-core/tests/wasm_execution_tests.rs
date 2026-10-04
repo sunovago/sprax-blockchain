@@ -1,6 +1,6 @@
 use sprax_core::{ChainLedger, GenesisConfig};
 use sprax_crypto::Ed25519Keypair;
-use sprax_storage::MemKVStore;
+use sprax_storage::RedbStore;
 use sprax_types::{Address, ChainId, Hash32, KeyType, Transaction, TxBody, TxFee, TxMessage};
 
 fn fixture() -> Vec<u8> {
@@ -35,12 +35,18 @@ fn real_wasm_executes_replicates_rolls_back_and_survives_restart() {
     let key = Ed25519Keypair::from_seed(&[88; 32]);
     let mut genesis = GenesisConfig::default_development();
     genesis.accounts[0].address = key.address();
-    let store = MemKVStore::new();
+    let directory = tempfile::tempdir().unwrap();
+    let database = directory.path().join("producer.redb");
+    let store = RedbStore::open(&database).unwrap();
     let mut producer =
         ChainLedger::init_from_genesis_with_store(genesis.clone(), store.clone()).unwrap();
-    let mut follower = ChainLedger::init_from_genesis(genesis.clone()).unwrap();
+    let follower_store = RedbStore::open(&directory.path().join("follower.redb")).unwrap();
+    let mut follower =
+        ChainLedger::init_from_genesis_with_store(genesis.clone(), follower_store).unwrap();
     let mut nonce = 0;
-    let mut send = |ledger: &mut ChainLedger, follower: &mut ChainLedger, message: TxMessage| {
+    let mut send = |ledger: &mut ChainLedger<RedbStore>,
+                    follower: &mut ChainLedger<RedbStore>,
+                    message: TxMessage| {
         let tx = transaction(&key, nonce, message);
         nonce += 1;
         let hash = ledger.submit_transaction(tx).unwrap();
@@ -107,7 +113,27 @@ fn real_wasm_executes_replicates_rolls_back_and_survives_restart() {
     assert!(proposed.body.transactions.is_empty());
     assert_eq!(producer.state_root().unwrap(), root);
     assert_eq!(producer.get_account(&key.address()).unwrap().nonce, 3);
-    let restarted = ChainLedger::open_or_init(store, || Ok(genesis)).unwrap();
+    let mut exhausted = transaction(
+        &key,
+        3,
+        TxMessage::ContractCall {
+            contract: address,
+            data: br#"{"burn_gas":{}}"#.to_vec(),
+            funds: sprax_types::Amount::ZERO,
+        },
+    );
+    exhausted.body.fee.gas_limit = 50_000;
+    exhausted.signature = key.sign(&exhausted.body.sign_bytes().unwrap());
+    producer.submit_transaction(exhausted).unwrap();
+    let proposed = producer.build_proposal(key.address()).unwrap();
+    assert!(proposed.body.transactions.is_empty());
+    assert_eq!(producer.state_root().unwrap(), root);
+    assert_eq!(producer.get_account(&key.address()).unwrap().nonce, 3);
+    drop(producer);
+    drop(store);
+    let reopened = RedbStore::open(&database).unwrap();
+    let restarted = ChainLedger::open_or_init(reopened, || Ok(genesis)).unwrap();
+    assert_eq!(restarted.state_root().unwrap(), root);
     let result = restarted
         .query_contract(address, br#"{"count":{}}"#, 200_000)
         .unwrap();
