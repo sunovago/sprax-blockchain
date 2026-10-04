@@ -170,3 +170,99 @@ async fn test_get_blocks_request_response_round_trip_over_real_tcp() {
     high.stop();
     low.stop();
 }
+
+#[test]
+fn bounded_encoding_checks_exact_payload_size() {
+    use sprax_network::NetworkMessage;
+    let msg = NetworkMessage::Ping { nonce: 42 };
+    let framed = msg.encode().unwrap();
+    let size = framed.len() - 4;
+    assert_eq!(msg.encode_bounded(size).unwrap(), framed);
+    assert!(msg.encode_bounded(size - 1).is_err());
+    assert!(msg.encode_bounded(0).is_err());
+}
+
+async fn raw_handshake(port: u16, peer: &str) -> tokio::net::TcpStream {
+    use sprax_network::NetworkMessage;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let handshake = NetworkMessage::Handshake {
+        peer_id: PeerId::new(peer).unwrap(),
+        chain_id: "sprax-devnet-1".into(),
+        height: 0,
+        latest_block_hash: Hash32::ZERO,
+        listen_addr: None,
+    };
+    stream
+        .write_all(&handshake.encode().unwrap())
+        .await
+        .unwrap();
+    let mut length = [0; 4];
+    tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut length))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut ack = vec![0; u32::from_be_bytes(length) as usize];
+    stream.read_exact(&mut ack).await.unwrap();
+    assert!(matches!(
+        NetworkMessage::decode(&ack).unwrap(),
+        NetworkMessage::HandshakeAck { .. }
+    ));
+    stream
+}
+
+#[tokio::test]
+async fn configured_frame_limit_and_duplicate_peer_rejection_over_tcp() {
+    use sprax_network::NetworkMessage;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let port = 37_951;
+    let (blocks, _receiver) = mpsc::channel(8);
+    let service = build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            max_message_size_bytes: 128,
+            ..Default::default()
+        },
+        blocks,
+        Arc::new(|_, _| Vec::new()),
+    );
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let mut first = raw_handshake(port, "same-peer").await;
+    let mut duplicate = raw_handshake(port, "same-peer").await;
+    let mut byte = [0; 1];
+    let result = tokio::time::timeout(Duration::from_secs(2), duplicate.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(result.is_err() || result.unwrap() == 0);
+    assert_eq!(service.connected_peers_count(), 1);
+    // The first socket remains routed and usable after rejecting the duplicate.
+    first
+        .write_all(&NetworkMessage::Ping { nonce: 7 }.encode().unwrap())
+        .await
+        .unwrap();
+    let mut length = [0; 4];
+    tokio::time::timeout(Duration::from_secs(2), first.read_exact(&mut length))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut pong = vec![0; u32::from_be_bytes(length) as usize];
+    first.read_exact(&mut pong).await.unwrap();
+    assert_eq!(
+        NetworkMessage::decode(&pong).unwrap(),
+        NetworkMessage::Pong { nonce: 7 }
+    );
+    // Only the prefix is sent: rejection must happen before payload allocation/read.
+    first.write_all(&129u32.to_be_bytes()).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(2), first.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(result.is_err() || result.unwrap() == 0);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while service.connected_peers_count() != 0 {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    service.stop();
+}

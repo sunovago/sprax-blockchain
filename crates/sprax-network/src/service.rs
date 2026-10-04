@@ -209,6 +209,7 @@ impl P2pService {
             self.inbound_proposal_tx.clone(),
             self.inbound_evidence_tx.clone(),
             Arc::clone(&self.block_fetch_fn),
+            self.config.max_message_size_bytes,
             slot,
         )
         .await
@@ -249,6 +250,7 @@ impl P2pService {
         let evidence_in = self.inbound_evidence_tx.clone();
         let fetch_fn = Arc::clone(&self.block_fetch_fn);
         let inbound_slots = Arc::clone(&self.inbound_slots);
+        let max_message_size = self.config.max_message_size_bytes;
 
         // Spawn Inbound TCP Listener Loop
         tokio::spawn(async move {
@@ -287,6 +289,7 @@ impl P2pService {
                                 proposal_in,
                                 evidence_in,
                                 fetch_fn,
+                                max_message_size,
                             )
                             .await
                             {
@@ -331,6 +334,7 @@ impl P2pService {
         inbound_proposal: mpsc::Sender<SignedProposal>,
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
+        max_message_size: usize,
     ) -> Result<(), NetworkError> {
         let remote_msg =
             tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
@@ -388,6 +392,7 @@ impl P2pService {
             inbound_proposal,
             inbound_evidence,
             block_fetch_fn,
+            max_message_size,
         )
         .await
     }
@@ -407,6 +412,7 @@ impl P2pService {
         inbound_proposal: mpsc::Sender<SignedProposal>,
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
+        max_message_size: usize,
         slot: OwnedSemaphorePermit,
     ) -> Result<(), NetworkError> {
         // Send Handshake
@@ -459,6 +465,7 @@ impl P2pService {
                 inbound_proposal,
                 inbound_evidence,
                 block_fetch_fn,
+                max_message_size,
             )
             .await
         });
@@ -479,6 +486,7 @@ impl P2pService {
         inbound_proposal: mpsc::Sender<SignedProposal>,
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
+        max_message_size: usize,
     ) -> Result<(), NetworkError> {
         let (mut reader, mut writer) = stream.into_split();
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<NetworkMessage>(8);
@@ -492,7 +500,16 @@ impl P2pService {
             sender: outbound_tx.clone(),
         };
 
-        peers.write().insert(remote_id.clone(), handle);
+        // Do not let a duplicate self-asserted ID replace the live connection's routing entry.
+        {
+            let mut connected = peers.write();
+            if connected.contains_key(&remote_id) {
+                return Err(NetworkError::ConnectionFailed(
+                    "duplicate connected peer ID".into(),
+                ));
+            }
+            connected.insert(remote_id.clone(), handle);
+        }
         info!(peer = %remote_id, "P2P Peer connected successfully");
 
         // Catch-up on connect: if this peer is ahead of us, ask for the blocks we're missing.
@@ -509,7 +526,7 @@ impl P2pService {
         // Writer task
         let write_task = tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
-                if let Ok(framed) = msg.encode() {
+                if let Ok(framed) = msg.encode_bounded(max_message_size) {
                     if writer.write_all(&framed).await.is_err() {
                         break;
                     }
@@ -525,7 +542,7 @@ impl P2pService {
                     break;
                 }
                 let len = u32::from_be_bytes(len_bytes) as usize;
-                if len > 10 * 1024 * 1024 {
+                if len == 0 || len > max_message_size {
                     break; // Message too large
                 }
                 let mut buf = vec![0u8; len];
@@ -603,7 +620,14 @@ impl P2pService {
         }
         .await;
 
-        peers.write().remove(&remote_id);
+        let mut connected = peers.write();
+        if connected
+            .get(&remote_id)
+            .is_some_and(|peer| peer.sender.same_channel(&outbound_tx))
+        {
+            connected.remove(&remote_id);
+        }
+        drop(connected);
         write_task.abort();
         info!(peer = %remote_id, "P2P Peer disconnected");
 
