@@ -79,7 +79,8 @@ fn test_stress_high_tx_throughput_and_balance_invariants() {
     assert_eq!(total_sent, 100);
     assert_eq!(ledger.height(), 5);
 
-    // Verify Invariant: Total supply is conserved (minus standard burned/collected fees)
+    // Verify Invariant: Total supply is conserved, accounting for both standard burned/collected
+    // fees and the block rewards minted to the proposer (keypairs[0]) across the 5 mined blocks.
     let mut total_balance_atto: u128 = 0;
     for kp in &keypairs {
         let acc = ledger.get_account(&kp.address()).unwrap();
@@ -88,7 +89,19 @@ fn test_stress_high_tx_throughput_and_balance_invariants() {
 
     let initial_supply_atto = 20 * 100_000 * 1_000_000_000_000_000_000u128;
     let total_fees_atto = 100 * TxFee::default().amount.as_atto();
-    assert_eq!(total_balance_atto + total_fees_atto, initial_supply_atto);
+    let block_reward_atto = GenesisConfig::default_development()
+        .consensus_params
+        .block_reward_at_height(1)
+        .as_atto();
+    let total_minted_atto = 5 * block_reward_atto;
+    assert_eq!(
+        total_balance_atto + total_fees_atto,
+        initial_supply_atto + total_minted_atto
+    );
+
+    let supply = ledger.get_supply_state().unwrap();
+    assert_eq!(supply.total_burned.as_atto(), total_fees_atto);
+    assert_eq!(total_balance_atto, supply.circulating_supply.as_atto());
 }
 
 #[test]

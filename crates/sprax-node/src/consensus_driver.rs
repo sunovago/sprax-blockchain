@@ -30,9 +30,8 @@ pub struct ConsensusDriver {
     inbound_proposal_rx: mpsc::UnboundedReceiver<(u64, u32, Block)>,
     is_running: Arc<AtomicBool>,
     precommitted_this_round: bool,
-    /// Height of the most recent `run_one_height` attempt, paired with `current_round`: a
-    /// retry of the *same* height increments the round instead of silently reusing round 0
-    /// (see [`sprax_consensus::BftConsensusEngine::set_round`] for why that matters).
+    pending_block: Option<Block>,
+
     last_attempted_height: u64,
     current_round: u32,
     min_peers_before_start: usize,
@@ -63,6 +62,7 @@ impl ConsensusDriver {
             inbound_proposal_rx,
             is_running,
             precommitted_this_round: false,
+            pending_block: None,
             last_attempted_height: 0,
             current_round: 0,
             min_peers_before_start,
@@ -104,11 +104,7 @@ impl ConsensusDriver {
         if val_set.has_quorum(self_power) {
             return;
         }
-        // Wait for the *configured* peer set (not just "any one peer") before producing the
-        // first proposal: each height is only ever proposed/broadcast once (no re-broadcast,
-        // no rollback on failed quorum — see the milestone's documented limitations), so a
-        // validator that starts racing ahead before a slightly-slower-to-connect peer has
-        // joined can leave that peer permanently unable to catch up on that height.
+
         let deadline = Instant::now() + Duration::from_secs(10);
         while self.p2p.connected_peers_count() < self.min_peers_before_start
             && Instant::now() < deadline
@@ -128,9 +124,6 @@ impl ConsensusDriver {
             0
         };
 
-        // Extracted into an owned Result first: `parking_lot::RwLockReadGuard` is `!Send`, and
-        // holding it as a match scrutinee temporary across the `.await` below (inside the Err
-        // arm) would make this function's generated future non-Send, breaking `tokio::spawn`.
         let val_set_result = self.staking.read().get_active_validator_set();
         let val_set = match val_set_result {
             Ok(vs) => vs,
@@ -144,6 +137,7 @@ impl ConsensusDriver {
         self.engine.start_height(next_height);
         self.engine.set_round(round);
         self.precommitted_this_round = false;
+        self.pending_block = None;
 
         let proposer = self.engine.select_proposer();
         let local_addr = self.local_key.address();
@@ -160,11 +154,15 @@ impl ConsensusDriver {
             return;
         };
 
+        let prevote_hash = match self.engine.locked_block() {
+            Some(locked) if locked != block_hash => None,
+            _ => Some(block_hash),
+        };
         if let Ok(vote) = Self::build_signed_vote(
             VoteType::Prevote,
             next_height,
             round,
-            Some(block_hash),
+            prevote_hash,
             &self.local_key,
         ) {
             self.broadcast_and_feed_vote(vote).await;
@@ -182,7 +180,7 @@ impl ConsensusDriver {
         round: u32,
         proposer_addr: Address,
     ) -> Option<Hash32> {
-        let mined = match self.ledger.write().mine_block(proposer_addr) {
+        let mined = match self.ledger.read().build_proposal(proposer_addr) {
             Ok(b) => b,
             Err(e) => {
                 warn!(height, "failed to mine proposed block: {e}");
@@ -196,6 +194,7 @@ impl ConsensusDriver {
                 return None;
             }
         };
+        self.pending_block = Some(mined.clone());
         self.p2p.broadcast_proposal(height, round, mined);
         match self.engine.propose_block(block_hash, proposer_addr) {
             Ok(()) => Some(block_hash),
@@ -212,14 +211,6 @@ impl ConsensusDriver {
         round: u32,
         expected_proposer: Address,
     ) -> Option<Hash32> {
-        // Drain (rather than bail out on the first) mismatched/stale proposals within the same
-        // overall deadline: a node that started slightly behind can have a backlog of Proposal
-        // messages for heights/rounds it has already missed queued ahead of the one it
-        // actually needs (TCP delivers in order, so the wanted one — if it was ever sent while
-        // we were connected — is still somewhere in that backlog). Bailing out on the very
-        // first mismatch would make such a node permanently unable to catch up. Bounded by
-        // `deadline` (not reset per message) so a truly empty/slow channel still gives up
-        // after `timeout_propose_ms`, same as before.
         let deadline = Instant::now() + Duration::from_millis(self.timeouts.timeout_propose_ms);
         let received = loop {
             let remaining = deadline.saturating_duration_since(Instant::now());
@@ -248,11 +239,14 @@ impl ConsensusDriver {
             return None;
         }
 
-        let apply_result = self.ledger.write().apply_block(block.clone());
+        let apply_result = self.ledger.read().validate_proposal(block.clone());
         match apply_result {
             Ok(_) => match Hasher::block_hash(&block.header) {
                 Ok(bh) => {
-                    let _ = self.engine.propose_block(bh, expected_proposer);
+                    if self.engine.propose_block(bh, expected_proposer).is_err() {
+                        return None;
+                    }
+                    self.pending_block = Some(block);
                     Some(bh)
                 }
                 Err(e) => {
@@ -340,6 +334,13 @@ impl ConsensusDriver {
             if evidence.is_valid_equivocation() {
                 if let Ok(slashed) = self.staking.write().slash_equivocation(&evidence) {
                     if !slashed.is_zero() {
+                        if let Err(e) = self
+                            .ledger
+                            .read()
+                            .apply_slash(&vote.validator_address, slashed)
+                        {
+                            warn!(validator = %vote.validator_address, "failed to apply slash to canonical stake: {e}");
+                        }
                         warn!(
                             validator = %vote.validator_address,
                             %slashed,
@@ -414,15 +415,55 @@ impl ConsensusDriver {
     }
 
     fn finalize_height(&mut self, height: u64, commit_sigs: Vec<CommitSignature>) {
-        if let Err(e) = self.ledger.write().set_last_commit(height, commit_sigs) {
-            warn!(height, "failed to record finalized commit signatures: {e}");
-        } else {
-            info!(height, "block finalized with +2/3 precommit quorum");
+        let Some(mut block) = self.pending_block.clone() else {
+            return;
+        };
+        let Ok(hash) = Hasher::block_hash(&block.header) else {
+            return;
+        };
+        if block.header.height != height
+            || self
+                .engine
+                .get_precommitted_block_with_quorum(height, self.current_round)
+                != Some(hash)
+        {
+            return;
         }
+        block.last_commit = commit_sigs;
+        if let Err(e) = sprax_consensus::verify_block_commit(&block, self.engine.validator_set()) {
+            warn!(height, "invalid finalization certificate: {e}");
+            return;
+        }
+        if let Err(e) = self.ledger.write().apply_block(block) {
+            warn!(height, "failed to commit finalized block: {e}");
+            return;
+        }
+        self.pending_block = None;
+        info!(height, "block finalized with +2/3 precommit quorum");
+        self.sync_stake_from_ledger();
         // Defensive re-broadcast: peers that missed the Proposal message still converge via
         // the existing, already-tested BlockGossip path.
         if let Some(block) = self.ledger.read().get_block_by_height(height).cloned() {
             self.p2p.broadcast_block(block);
+        }
+    }
+
+    /// Re-syncs every known validator's cached `tokens` in `StakingKeeper` (the BFT-facing
+    /// active-validator-set cache) from `sprax-core`'s canonical, transaction-driven
+    /// `ValidatorStakeState` — the source of truth updated by `Delegate`/`Unbond` transactions
+    /// and by `apply_slash`. Called once per finalized height so the next height's proposer
+    /// selection / quorum weighting reflects that height's staking activity.
+    fn sync_stake_from_ledger(&self) {
+        let addresses = self.staking.read().all_validator_addresses();
+        let ledger = self.ledger.read();
+        let mut staking = self.staking.write();
+        for addr in addresses {
+            match ledger.get_validator_stake(&addr) {
+                Ok(stake) => staking.sync_validator_tokens(&addr, stake.tokens),
+                Err(e) => {
+                    warn!(validator = %addr, "failed to read canonical validator stake: {e}");
+                }
+            }
         }
     }
 
@@ -449,6 +490,7 @@ impl ConsensusDriver {
 
 pub async fn run_evidence_listener(
     staking: Arc<RwLock<StakingKeeper>>,
+    ledger: Arc<RwLock<ChainLedger<RedbStore>>>,
     mut inbound_evidence_rx: mpsc::UnboundedReceiver<EquivocationEvidence>,
     is_running: Arc<AtomicBool>,
 ) {
@@ -460,6 +502,12 @@ pub async fn run_evidence_listener(
                 }
                 match staking.write().slash_equivocation(&evidence) {
                     Ok(slashed) if !slashed.is_zero() => {
+                        if let Err(e) = ledger
+                            .read()
+                            .apply_slash(&evidence.validator_address, slashed)
+                        {
+                            warn!(validator = %evidence.validator_address, "failed to apply slash to canonical stake: {e}");
+                        }
                         warn!(
                             validator = %evidence.validator_address,
                             %slashed,

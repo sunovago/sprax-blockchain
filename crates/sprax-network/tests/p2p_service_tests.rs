@@ -36,8 +36,10 @@ fn build_service(
     let (vote_tx, _vote_rx) = mpsc::unbounded_channel();
     let (proposal_tx, _proposal_rx) = mpsc::unbounded_channel();
     let (evidence_tx, _evidence_rx) = mpsc::unbounded_channel();
-    let mut config = NetworkConfig::default();
-    config.p2p_port = port;
+    let config = NetworkConfig {
+        p2p_port: port,
+        ..Default::default()
+    };
     P2pService::new(
         peer_id,
         "sprax-devnet-1".to_string(),

@@ -198,10 +198,23 @@ async fn run_three_node_test() {
 
     let bob_balance = services[0].get_account(&bob_addr).unwrap();
     // Bob's genesis allocation is 500,000 SPRX (see NodeService::new_or_load's default devnet
-    // genesis) plus the 100 SPRX transferred by this test's transaction.
+    // genesis) plus the 100 SPRX transferred by this test's transaction. Bob is also one of the
+    // two active validators, so he may additionally have earned block-reward mint for any height
+    // where he was selected proposer during the test's polling window — that surplus is
+    // non-deterministic (depends on proposer rotation timing), so assert the guaranteed floor
+    // and that any surplus is a whole multiple of the per-block reward rather than a fixed total.
+    let expected_floor = Amount::from_sprx_whole(500_100).unwrap();
+    assert!(
+        bob_balance.balance >= expected_floor,
+        "bob's balance {} must be at least the transferred {expected_floor} (genesis + transfer)",
+        bob_balance.balance
+    );
+    let surplus = bob_balance.balance.checked_sub(expected_floor).unwrap();
+    let per_block_reward = Amount::from_sprx_whole(2).unwrap();
     assert_eq!(
-        bob_balance.balance,
-        Amount::from_sprx_whole(500_100).unwrap()
+        surplus.as_atto() % per_block_reward.as_atto(),
+        0,
+        "surplus above the guaranteed transfer must be a whole number of block rewards, got {surplus}"
     );
 
     for service in &services {
@@ -343,6 +356,19 @@ async fn test_double_sign_triggers_real_slashing_across_network() {
         assert_eq!(
             val.tokens, expected_remaining,
             "charlie's stake must be reduced by exactly the 5% double-sign slash fraction"
+        );
+    }
+
+    // The slash must also land in sprax-core's canonical, transaction-driven stake ledger (not
+    // just StakingKeeper's in-memory BFT cache) — this is what `ConsensusDriver`'s per-height
+    // `sync_stake_from_ledger`/evidence-listener `apply_slash` wiring exists to guarantee.
+    for service in &services {
+        let canonical_stake = service
+            .get_validator_stake(&charlie_addr)
+            .expect("canonical validator stake must be readable");
+        assert_eq!(
+            canonical_stake.tokens, expected_remaining,
+            "canonical ledger stake must reflect the slash, not just StakingKeeper's cache"
         );
     }
 

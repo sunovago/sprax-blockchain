@@ -1,7 +1,9 @@
 # SPRX Protocol: Master Project Status & Phase Tracking Matrix
 **Last Updated:** 2026-08-20  
-**Repository Posture:** COMPLETE (Phases 01–12 Built, Verified & Tested)  
-**Mainnet Readiness:** READY FOR EXTERNAL AUDIT & GENESIS CEREMONY  
+**Repository Posture:** INCOMPLETE — current hardening is under verification.
+**Mainnet Readiness:** NOT READY — see [current readiness](MAINNET_READINESS.md).
+
+The phase table below is historical and does not establish current production readiness.
 
 ---
 

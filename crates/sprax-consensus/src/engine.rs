@@ -110,6 +110,12 @@ impl BftConsensusEngine {
 
     /// Transitions engine to a new height.
     pub fn start_height(&mut self, height: u64) {
+        if self.state.height == height {
+            if self.state.step == RoundStep::NewHeight {
+                self.state.step = RoundStep::Propose;
+            }
+            return;
+        }
         self.state = RoundState::new(height);
         self.prevotes.clear();
         self.precommits.clear();
@@ -125,6 +131,7 @@ impl BftConsensusEngine {
     /// indistinguishable from real double-signing to any observer.
     pub fn set_round(&mut self, round: u32) {
         self.state.round = round;
+        self.state.step = RoundStep::Propose;
     }
 
     /// Selects the deterministic proposer for the current round using DWRR.
@@ -332,6 +339,7 @@ impl BftConsensusEngine {
         for ((h, r, addr), vote) in &self.precommits {
             if *h == height && *r == round && vote.block_hash == Some(block_hash) {
                 sigs.push(CommitSignature {
+                    round,
                     validator_address: *addr,
                     signature: vote.signature.clone(),
                     timestamp_unix_secs: 1_700_000_000,

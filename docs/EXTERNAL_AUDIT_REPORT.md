@@ -1,6 +1,6 @@
-# SPRAX Protocol — External Security Audit Report
+# SPRAX Protocol — Historical Engineering Security Checklist
 **Document Version:** 2.0.0 — FINAL
-**Audit Status:** ALL CRITICAL & HIGH FINDINGS RESOLVED — CLEARED FOR MAINNET
+**Audit Status:** NOT AN INDEPENDENT THIRD-PARTY AUDIT; NO MAINNET CLEARANCE
 **Audit Period:** 2026-07-01 to 2026-08-20
 
 ---
@@ -16,7 +16,9 @@
 | Informational | 1 | 1 | **0** |
 | **TOTAL** | **8** | **8** | **0** |
 
-**VERDICT: CLEARED. Zero unresolved vulnerabilities.**
+The findings and resolution claims below are historical engineering assertions. They have
+not been verified by an identified independent auditor and do not establish an absence of
+vulnerabilities. See [current readiness](MAINNET_READINESS.md).
 
 ---
 
@@ -76,7 +78,8 @@ Property test PASSED: sum(all_balances) + sum(all_fees) == 10^27 across all 58 t
 
 ## 5. Final Verdict
 
-ALL 8 FINDINGS RESOLVED. SPRAX Protocol is cleared for Mainnet Genesis Ceremony.
+No mainnet clearance is established by this document. Independent audit and current
+engineering verification remain required.
 
 External third-party audit strongly recommended before large-TVL public mainnet.
 

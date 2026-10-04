@@ -56,7 +56,10 @@ impl NodeService {
         };
 
         let keyring_dir = home.join("keyring");
-        let keyring = Keyring::open_or_create(&keyring_dir)?;
+        let keyring = Keyring::open_or_create_with_development_keys(
+            &keyring_dir,
+            config.environment == crate::Environment::Development,
+        )?;
 
         let data_dir = home.join("data");
         let genesis_file = home.join("genesis.json");
@@ -65,6 +68,9 @@ impl NodeService {
             GenesisConfig::load_from_file(&genesis_file)
                 .map_err(|e| NodeError::ConfigError(e.to_string()))?
         } else {
+            if config.environment != crate::Environment::Development {
+                return Err(NodeError::ConfigError("testnet/mainnet requires an explicit genesis file; development keys cannot be used".into()));
+            }
             let alice_kp = Ed25519Keypair::from_seed(&[1u8; 32]);
             let bob_kp = Ed25519Keypair::from_seed(&[2u8; 32]);
             let charlie_kp = Ed25519Keypair::from_seed(&[3u8; 32]);
@@ -114,6 +120,35 @@ impl NodeService {
                 .map_err(|e| NodeError::ConfigError(e.to_string()))?;
             default_genesis
         };
+
+        if genesis.chain_id != config.chain_id {
+            return Err(NodeError::ConfigError(
+                "genesis chain ID does not match node configuration".into(),
+            ));
+        }
+        if config.environment != crate::Environment::Development {
+            if genesis.validators.is_empty() {
+                return Err(NodeError::ConfigError(
+                    "testnet/mainnet genesis requires validators".into(),
+                ));
+            }
+            let known_keys: Vec<_> = (1..=3)
+                .map(|n| {
+                    Ed25519Keypair::from_seed(&[n; 32])
+                        .public_key_bytes()
+                        .to_vec()
+                })
+                .collect();
+            if genesis
+                .validators
+                .iter()
+                .any(|v| known_keys.contains(&v.consensus_pubkey))
+            {
+                return Err(NodeError::ConfigError(
+                    "public development validator keys are forbidden outside development".into(),
+                ));
+            }
+        }
 
         let store = RedbStore::open(&data_dir.join("state.redb"))
             .map_err(|e| NodeError::StorageError(e.to_string()))?;
@@ -213,6 +248,16 @@ impl NodeService {
             .map_err(|e| NodeError::StorageError(e.to_string()))
     }
 
+    pub fn get_validator_stake(
+        &self,
+        validator: &Address,
+    ) -> Result<sprax_core::state::ValidatorStakeState, NodeError> {
+        self.ledger
+            .read()
+            .get_validator_stake(validator)
+            .map_err(|e| NodeError::StorageError(e.to_string()))
+    }
+
     pub fn get_block_by_height(&self, height: u64) -> Option<Block> {
         self.ledger.read().get_block_by_height(height).cloned()
     }
@@ -304,6 +349,13 @@ impl NodeService {
     }
 
     pub fn mine_block(&self, proposer: Address) -> Result<Block, NodeError> {
+        if self.config.environment != crate::Environment::Development
+            || self.config.consensus.enabled
+        {
+            return Err(NodeError::RuntimeError(
+                "manual mining requires development mode with consensus disabled".into(),
+            ));
+        }
         let mut guard = self.ledger.write();
         let block = guard
             .mine_block(proposer)
@@ -325,6 +377,18 @@ impl NodeService {
     }
 
     pub fn apply_block(&self, block: Block) -> Result<Vec<TxReceipt>, NodeError> {
+        if self.config.environment != crate::Environment::Development
+            || self.config.consensus.enabled
+            || !block.last_commit.is_empty()
+        {
+            let validators = self
+                .staking
+                .read()
+                .get_active_validator_set()
+                .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
+            sprax_consensus::verify_block_commit(&block, &validators)
+                .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
+        }
         let mut guard = self.ledger.write();
         let receipts = guard
             .apply_block(block)
@@ -335,11 +399,11 @@ impl NodeService {
 
     /// Applies a batch of historical blocks for catch-up synchronization.
     pub fn apply_blocks_batch(&self, blocks: Vec<Block>) -> Result<usize, NodeError> {
-        let mut guard = self.ledger.write();
-        let count = guard
-            .apply_blocks_batch(blocks)
-            .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
-
+        let mut count = 0;
+        for block in blocks {
+            self.apply_block(block)?;
+            count += 1;
+        }
         Ok(count)
     }
 
@@ -403,6 +467,9 @@ impl NodeService {
         );
 
         let ledger_clone = Arc::clone(&self.ledger);
+        let staking_for_gossip = Arc::clone(&self.staking);
+        let require_commit = self.config.environment != crate::Environment::Development
+            || self.config.consensus.enabled;
         let is_running = Arc::clone(&self.is_running);
 
         // Background Inbound Gossip Processor
@@ -414,6 +481,13 @@ impl NodeService {
                         let _ = guard.submit_transaction(tx);
                     }
                     Some(block) = inbound_block_rx.recv() => {
+                        if require_commit || !block.last_commit.is_empty() {
+                            let validators = staking_for_gossip.read().get_active_validator_set();
+                            match validators {
+                                Ok(validators) if sprax_consensus::verify_block_commit(&block, &validators).is_ok() => {}
+                                _ => { warn!("rejected block gossip without a valid quorum certificate"); continue; }
+                            }
+                        }
                         let mut guard = ledger_clone.write();
                         let _ = guard.apply_block(block);
                     }
@@ -424,6 +498,7 @@ impl NodeService {
 
         tokio::spawn(crate::consensus_driver::run_evidence_listener(
             Arc::clone(&self.staking),
+            Arc::clone(&self.ledger),
             inbound_evidence_rx,
             Arc::clone(&self.is_running),
         ));

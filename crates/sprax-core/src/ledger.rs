@@ -5,9 +5,9 @@ use crate::{
     state::{AccountState, StateAccessor},
 };
 use sprax_crypto::Hasher;
-use sprax_storage::{ChainMetaStore, KVStore, MemKVStore, StateCommitment};
+use sprax_storage::{ChainMetaStore, KVStore, MemKVStore, OverlayStore, StateCommitment};
 use sprax_types::{
-    Address, Block, BlockBody, BlockHeader, Hash32, Transaction, TxMessage, TxReceipt,
+    Address, Amount, Block, BlockBody, BlockHeader, Hash32, Transaction, TxMessage, TxReceipt,
 };
 use std::collections::HashMap;
 
@@ -35,7 +35,8 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         genesis: GenesisConfig,
         store: S,
     ) -> Result<Self, CoreError> {
-        let genesis_header = genesis.initialize_state(&store)?;
+        let pending = OverlayStore::new(store.clone());
+        let genesis_header = genesis.initialize_state(&pending)?;
 
         let genesis_block = Block {
             header: genesis_header.clone(),
@@ -49,9 +50,12 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         let mut block_by_hash = HashMap::new();
         block_by_hash.insert(genesis_hash, 0);
 
-        Self::persist_block(&store, 0, &genesis_block, genesis_hash)?;
-        store
+        ChainLedger::<OverlayStore<S>>::persist_block(&pending, 0, &genesis_block, genesis_hash)?;
+        pending
             .put_height(0)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        pending
+            .commit_chain()
             .map_err(|e| CoreError::StateError(e.to_string()))?;
 
         Ok(Self {
@@ -207,6 +211,42 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         StateAccessor::get_account(&self.store, addr)
     }
 
+    pub fn get_supply_state(&self) -> Result<crate::state::SupplyState, CoreError> {
+        StateAccessor::get_supply_state(&self.store)
+    }
+
+    pub fn get_validator_stake(
+        &self,
+        validator: &Address,
+    ) -> Result<crate::state::ValidatorStakeState, CoreError> {
+        StateAccessor::get_validator_stake(&self.store, validator)
+    }
+
+    pub fn get_delegation(
+        &self,
+        delegator: &Address,
+        validator: &Address,
+    ) -> Result<crate::state::DelegationState, CoreError> {
+        StateAccessor::get_delegation(&self.store, delegator, validator)
+    }
+
+    /// Reduces `validator`'s canonical bonded stake by `slashed_amount` (saturating at zero).
+    /// Called from `sprax-node`'s `ConsensusDriver` right after `StakingKeeper::slash_equivocation`/
+    /// `slash_downtime` slash the in-memory BFT cache, so the canonical, transaction-driven ledger
+    /// (delegate/undelegate) and the BFT validator-set cache never permanently diverge.
+    pub fn apply_slash(
+        &self,
+        validator: &Address,
+        slashed_amount: Amount,
+    ) -> Result<(), CoreError> {
+        let mut stake = StateAccessor::get_validator_stake(&self.store, validator)?;
+        stake.tokens = stake
+            .tokens
+            .checked_sub(slashed_amount)
+            .unwrap_or(Amount::ZERO);
+        StateAccessor::set_validator_stake(&self.store, validator, &stake)
+    }
+
     /// Submits a signed transaction into the local mempool after pre-validation.
     pub fn submit_transaction(&mut self, tx: Transaction) -> Result<Hash32, CoreError> {
         let tx_hash = Hasher::tx_hash(&tx).map_err(|e| CoreError::StateError(e.to_string()))?;
@@ -242,7 +282,7 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
 
         let mut total_transfer_cost = sprax_types::Amount::ZERO;
         for msg in &tx.body.messages {
-            if let TxMessage::Transfer { amount, .. } = msg {
+            if let TxMessage::Transfer { amount, .. } | TxMessage::Delegate { amount, .. } = msg {
                 total_transfer_cost = total_transfer_cost
                     .checked_add(*amount)
                     .map_err(|e| CoreError::StateError(e.to_string()))?;
@@ -263,8 +303,96 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         Ok(tx_hash)
     }
 
+    fn apply_block_reward(&self, height: u64, proposer: Address) -> Result<(), CoreError> {
+        let reward = self.genesis.consensus_params.block_reward_at_height(height);
+        if reward.is_zero() {
+            return Ok(());
+        }
+
+        let mut supply = StateAccessor::get_supply_state(&self.store)?;
+        let headroom = self
+            .genesis
+            .consensus_params
+            .max_supply
+            .checked_sub(supply.circulating_supply)
+            .unwrap_or(Amount::ZERO);
+        let actual_reward = if reward < headroom { reward } else { headroom };
+        if actual_reward.is_zero() {
+            return Ok(());
+        }
+
+        let mut proposer_state = StateAccessor::get_account(&self.store, &proposer)?;
+        proposer_state.balance = proposer_state
+            .balance
+            .checked_add(actual_reward)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        StateAccessor::set_account(&self.store, &proposer, &proposer_state)?;
+
+        supply.circulating_supply = supply
+            .circulating_supply
+            .checked_add(actual_reward)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        StateAccessor::set_supply_state(&self.store, &supply)?;
+
+        Ok(())
+    }
+
+    fn sweep_matured_unbondings(&self, height: u64) -> Result<(), CoreError> {
+        let matured = StateAccessor::scan_matured_unbondings(&self.store, height)?;
+        for (key, entry) in matured {
+            let mut delegator_state = StateAccessor::get_account(&self.store, &entry.delegator)?;
+            delegator_state.balance = delegator_state
+                .balance
+                .checked_add(entry.amount)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            StateAccessor::set_account(&self.store, &entry.delegator, &delegator_state)?;
+            self.store
+                .delete(&key)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Mines a new block from all pending transactions in the mempool.
+    pub fn build_proposal(&self, proposer: Address) -> Result<Block, CoreError> {
+        self.staged().mine_block_inner(proposer)
+    }
+
+    pub fn validate_proposal(&self, block: Block) -> Result<Vec<TxReceipt>, CoreError> {
+        self.staged().apply_block_inner(block)
+    }
+
     pub fn mine_block(&mut self, proposer: Address) -> Result<Block, CoreError> {
+        let mut staged = self.staged();
+        let block = staged.mine_block_inner(proposer)?;
+        staged
+            .store
+            .commit_chain()
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        self.accept_staged(staged);
+        Ok(block)
+    }
+
+    fn staged(&self) -> ChainLedger<OverlayStore<S>> {
+        ChainLedger {
+            genesis: self.genesis.clone(),
+            store: OverlayStore::new(self.store.clone()),
+            blocks: self.blocks.clone(),
+            block_by_hash: self.block_by_hash.clone(),
+            tx_index: self.tx_index.clone(),
+            mempool: self.mempool.clone(),
+            executor: self.executor.clone(),
+        }
+    }
+
+    fn accept_staged(&mut self, staged: ChainLedger<OverlayStore<S>>) {
+        self.blocks = staged.blocks;
+        self.block_by_hash = staged.block_by_hash;
+        self.tx_index = staged.tx_index;
+        self.mempool = staged.mempool;
+    }
+
+    fn mine_block_inner(&mut self, proposer: Address) -> Result<Block, CoreError> {
         let current_height = self.height() + 1;
         let (parent_hash, parent_timestamp, val_set_hash) = {
             let parent_header = self.latest_header();
@@ -281,15 +409,33 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         let mut executed_txs = Vec::with_capacity(pending_txs.len());
         let mut receipts = Vec::with_capacity(pending_txs.len());
         let mut tx_hashes = Vec::with_capacity(pending_txs.len());
+        let mut reserved_gas = 0u64;
+        let mut reserved_bytes = 1024usize;
 
         for tx in pending_txs {
+            let bytes = serde_json::to_vec(&tx)
+                .map_err(|e| CoreError::StateError(e.to_string()))?
+                .len();
+            let next_gas = reserved_gas.checked_add(tx.body.fee.gas_limit);
+            let next_bytes = reserved_bytes.checked_add(bytes);
+            if next_gas.map_or(true, |gas| {
+                gas > self.genesis.consensus_params.max_block_gas
+            }) || next_bytes.map_or(true, |size| {
+                size > self.genesis.consensus_params.max_block_size_bytes
+            }) {
+                self.mempool.push(tx);
+                continue;
+            }
             match self.executor.execute_transaction(
                 &self.store,
                 &tx,
                 current_height,
                 &self.genesis.chain_id,
+                self.genesis.consensus_params.unbonding_period_blocks,
             ) {
                 Ok(receipt) => {
+                    reserved_gas = next_gas.expect("validated gas bound");
+                    reserved_bytes = next_bytes.expect("validated size bound");
                     let hash = receipt.tx_hash;
                     tx_hashes.push(hash);
                     receipts.push(receipt.clone());
@@ -304,6 +450,9 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
                 }
             }
         }
+
+        self.apply_block_reward(current_height, proposer)?;
+        self.sweep_matured_unbondings(current_height)?;
 
         let state_root = self.state_root()?;
         let txs_root = Hasher::merkle_root(&tx_hashes);
@@ -349,6 +498,17 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
 
     /// Validates and applies an externally received block to the local ledger (for gossip / synchronization).
     pub fn apply_block(&mut self, block: Block) -> Result<Vec<TxReceipt>, CoreError> {
+        let mut staged = self.staged();
+        let receipts = staged.apply_block_inner(block)?;
+        staged
+            .store
+            .commit_chain()
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        self.accept_staged(staged);
+        Ok(receipts)
+    }
+
+    fn apply_block_inner(&mut self, block: Block) -> Result<Vec<TxReceipt>, CoreError> {
         let block_height = block.header.height;
         let local_height = self.height();
 
@@ -379,6 +539,36 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
                 ),
             });
         }
+        if block.header.version != 1
+            || block.header.timestamp_unix_secs <= self.latest_header().timestamp_unix_secs
+        {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "invalid block version or non-increasing timestamp".into(),
+            });
+        }
+        let size = serde_json::to_vec(&block)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .len();
+        if size > self.genesis.consensus_params.max_block_size_bytes {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "block exceeds size limit".into(),
+            });
+        }
+        let reserved_gas = block
+            .body
+            .transactions
+            .iter()
+            .try_fold(0u64, |sum, tx| sum.checked_add(tx.body.fee.gas_limit));
+        if reserved_gas.map_or(true, |gas| {
+            gas > self.genesis.consensus_params.max_block_gas
+        }) {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "block exceeds gas limit".into(),
+            });
+        }
 
         // 4. Verify Parent Hash
         let expected_parent_hash = Hasher::block_hash(self.latest_header())
@@ -403,6 +593,7 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
                 tx,
                 block_height,
                 &self.genesis.chain_id,
+                self.genesis.consensus_params.unbonding_period_blocks,
             )?;
             let hash = receipt.tx_hash;
             tx_hashes.push(hash);
@@ -413,6 +604,8 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         }
 
         // 6. Verify Computed State Root matches Header State Root
+        self.apply_block_reward(block_height, block.header.proposer)?;
+        self.sweep_matured_unbondings(block_height)?;
         let computed_state_root = self.state_root()?;
         if computed_state_root != block.header.state_root {
             return Err(CoreError::ModuleError {

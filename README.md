@@ -11,7 +11,7 @@ backend/indexer — in one monorepo.
 
 [![License: Apache-2.0 OR MIT](https://img.shields.io/badge/license-Apache--2.0%20OR%20MIT-blue.svg)](LICENSE)
 [![Rust](https://img.shields.io/badge/rust-1.80%2B-orange.svg)](rust-toolchain.toml)
-[![Status](https://img.shields.io/badge/phases-12%2F12%20complete-brightgreen.svg)](docs/PROJECT_STATUS.md)
+[![Status](https://img.shields.io/badge/status-mainnet%20work%20in%20progress-orange.svg)](docs/MAINNET_READINESS.md)
 
 [Architecture](#architecture) · [Quickstart](#quickstart) · [Repository Layout](#repository-layout) · [Documentation](#documentation) · [Contributing](#contributing)
 
@@ -33,11 +33,10 @@ Layer-1 blockchain combining:
 
 The native asset is **SPRX** — see [Native Asset & Tokenomics](#native-asset--tokenomics) below.
 
-> **Project status:** all 12 phases of the [multi-phase roadmap](docs/ROADMAP.md) — architecture through
-> mainnet preparation — are marked complete in [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md), with 58
-> workspace tests passing across the 10 Rust crates. The protocol has **not** had an external third-party
-> audit yet (see [docs/SECURITY_AUDIT.md](docs/SECURITY_AUDIT.md) and [docs/EXTERNAL_AUDIT_REPORT.md](docs/EXTERNAL_AUDIT_REPORT.md)); treat mainnet
-> parameters as pre-audit.
+> **Project status:** mainnet work is in progress. Earlier phase-completion and launch-clearance
+> documents are historical claims, not evidence of production readiness. See
+> [current readiness and verification gaps](docs/MAINNET_READINESS.md). The smart-contract VM is
+> incomplete and independent third-party audit evidence is still required.
 
 ---
 

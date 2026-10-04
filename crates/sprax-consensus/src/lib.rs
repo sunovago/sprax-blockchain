@@ -1,4 +1,6 @@
+pub mod commit;
 pub mod engine;
+pub use commit::verify_block_commit;
 pub mod error;
 pub mod evidence;
 pub mod round;

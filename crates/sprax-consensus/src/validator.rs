@@ -36,7 +36,23 @@ impl ValidatorSet {
                 "validator set cannot be empty".into(),
             ));
         }
-        let total_voting_power: u64 = validators.iter().map(|v| v.voting_power).sum();
+        let mut addresses = std::collections::HashSet::new();
+        let mut total_voting_power = 0u64;
+        for validator in &validators {
+            if validator.voting_power == 0 || !addresses.insert(validator.address) {
+                return Err(ConsensusError::InvalidValidatorSet(
+                    "zero power or duplicate validator".into(),
+                ));
+            }
+            total_voting_power = total_voting_power
+                .checked_add(validator.voting_power)
+                .filter(|power| *power <= i64::MAX as u64 / 4)
+                .ok_or_else(|| {
+                    ConsensusError::InvalidValidatorSet(
+                        "voting power exceeds safe proposer arithmetic bound".into(),
+                    )
+                })?;
+        }
         if total_voting_power == 0 {
             return Err(ConsensusError::InvalidValidatorSet(
                 "total voting power cannot be zero".into(),
@@ -81,7 +97,7 @@ impl ValidatorSet {
     /// Consensus Quorum Threshold: Q = floor(2W/3) + 1.
     #[must_use]
     pub fn quorum_threshold(&self) -> u64 {
-        (self.total_voting_power * 2 / 3) + 1
+        ((u128::from(self.total_voting_power) * 2 / 3) + 1) as u64
     }
 
     /// Checks if a given voting power sum satisfies consensus quorum.

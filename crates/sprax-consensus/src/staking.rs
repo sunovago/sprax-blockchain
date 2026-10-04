@@ -420,6 +420,18 @@ impl StakingKeeper {
         self.validators.get(addr)
     }
 
+    /// All validator addresses known to this keeper (active, jailed, or unbonding) — the set
+    /// `ConsensusDriver` walks each height to re-sync cached `tokens` from the canonical ledger.
+    pub fn all_validator_addresses(&self) -> Vec<Address> {
+        self.validators.keys().copied().collect()
+    }
+
+    pub fn sync_validator_tokens(&mut self, addr: &Address, canonical_tokens: Amount) {
+        if let Some(val) = self.validators.get_mut(addr) {
+            val.tokens = canonical_tokens;
+        }
+    }
+
     pub fn get_delegation(&self, delegator: &Address, validator: &Address) -> Option<&Delegation> {
         self.delegations.get(&(*delegator, *validator))
     }

@@ -78,11 +78,16 @@ async fn test_local_node_full_lifecycle_and_cli_flow() {
     assert_eq!(david_after.balance, transfer_amount);
 
     let alice_after = service.get_account(&alice_addr).expect("get alice after");
+    // Alice is also this block's proposer, so she additionally earns the height-1 block reward
+    // (2 SPRX, no halving elapsed) on top of the transfer + fee deduction.
+    let block_reward = Amount::from_sprx_whole(2).unwrap();
     let expected_alice_bal = Amount::from_sprx_whole(1_000_000)
         .unwrap()
         .checked_sub(transfer_amount)
         .unwrap()
         .checked_sub(fee.amount)
+        .unwrap()
+        .checked_add(block_reward)
         .unwrap();
     assert_eq!(alice_after.balance, expected_alice_bal);
     assert_eq!(alice_after.nonce, 1);
