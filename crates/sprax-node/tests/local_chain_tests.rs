@@ -28,9 +28,9 @@ async fn test_local_node_full_lifecycle_and_cli_flow() {
 
     assert_eq!(
         alice_init.balance,
-        Amount::from_sprx_whole(1_000_000).unwrap()
+        Amount::from_sprx_whole(900_000).unwrap()
     );
-    assert_eq!(bob_init.balance, Amount::from_sprx_whole(500_000).unwrap());
+    assert_eq!(bob_init.balance, Amount::from_sprx_whole(450_000).unwrap());
 
     // 2. Create a new account in keyring (David)
     let (david_addr, _) = keyring
@@ -81,7 +81,7 @@ async fn test_local_node_full_lifecycle_and_cli_flow() {
     // Alice is also this block's proposer, so she additionally earns the height-1 block reward
     // (2 SPRX, no halving elapsed) on top of the transfer + fee deduction.
     let block_reward = Amount::from_sprx_whole(2).unwrap();
-    let expected_alice_bal = Amount::from_sprx_whole(1_000_000)
+    let expected_alice_bal = Amount::from_sprx_whole(900_000)
         .unwrap()
         .checked_sub(transfer_amount)
         .unwrap()

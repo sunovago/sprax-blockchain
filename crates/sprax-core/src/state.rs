@@ -25,7 +25,7 @@ impl Default for AccountState {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct SupplyState {
-    /// Sum of all account balances currently in circulation (genesis + minted - burned).
+    /// Total issued supply, including liquid, bonded and unbonding balances (genesis + minted - burned).
     pub circulating_supply: Amount,
     /// Cumulative transaction fees burned since genesis (informational/analytics only).
     pub total_burned: Amount,

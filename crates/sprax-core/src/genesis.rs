@@ -204,6 +204,8 @@ impl GenesisConfig {
         if self.initial_height != 0
             || self.consensus_params.max_block_gas == 0
             || self.consensus_params.max_block_size_bytes == 0
+            || self.consensus_params.halving_interval_blocks == 0
+            || self.consensus_params.block_time_target_ms == 0
         {
             return Err(CoreError::StateError(
                 "unsupported genesis height or zero block limits".into(),
@@ -228,6 +230,28 @@ impl GenesisConfig {
             return Err(CoreError::StateError(
                 "genesis allocations exceed maximum supply".into(),
             ));
+        }
+        let mut operators = std::collections::HashSet::new();
+        let mut consensus_keys = std::collections::HashSet::new();
+        for validator in &self.validators {
+            if !operators.insert(validator.operator_address)
+                || !consensus_keys.insert(validator.consensus_pubkey.clone())
+                || validator.consensus_pubkey.len() != 32
+                || validator.self_stake == Amount::ZERO
+            {
+                return Err(CoreError::StateError(
+                    "invalid or duplicate genesis validator".into(),
+                ));
+            }
+            let allocation = self
+                .accounts
+                .iter()
+                .find(|account| account.address == validator.operator_address);
+            if allocation.is_none_or(|account| account.initial_balance < validator.self_stake) {
+                return Err(CoreError::StateError(
+                    "genesis self-stake must be funded by the operator allocation".into(),
+                ));
+            }
         }
         store
             .set(Self::IDENTITY_KEY, self.fingerprint()?.as_bytes())
@@ -258,6 +282,21 @@ impl GenesisConfig {
         // same self-stake the validator was registered with, instead of zeroing it out at the
         // first height.
         for val in &self.validators {
+            let mut operator = StateAccessor::get_account(store, &val.operator_address)?;
+            operator.balance = operator
+                .balance
+                .checked_sub(val.self_stake)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            StateAccessor::set_account(store, &val.operator_address, &operator)?;
+            StateAccessor::set_delegation(
+                store,
+                &val.operator_address,
+                &val.operator_address,
+                &crate::state::DelegationState {
+                    shares: val.self_stake,
+                    balance: val.self_stake,
+                },
+            )?;
             StateAccessor::set_validator_stake(
                 store,
                 &val.operator_address,

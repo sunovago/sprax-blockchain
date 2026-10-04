@@ -203,7 +203,7 @@ async fn run_three_node_test() {
     // where he was selected proposer during the test's polling window — that surplus is
     // non-deterministic (depends on proposer rotation timing), so assert the guaranteed floor
     // and that any surplus is a whole multiple of the per-block reward rather than a fixed total.
-    let expected_floor = Amount::from_sprx_whole(500_100).unwrap();
+    let expected_floor = Amount::from_sprx_whole(450_100).unwrap();
     assert!(
         bob_balance.balance >= expected_floor,
         "bob's balance {} must be at least the transferred {expected_floor} (genesis + transfer)",
