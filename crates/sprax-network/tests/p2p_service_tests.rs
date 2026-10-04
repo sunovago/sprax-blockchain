@@ -315,3 +315,36 @@ async fn stop_closes_pending_handshakes_active_sockets_and_releases_listener() {
     let _restarted = raw_handshake(port, "restart-peer").await;
     service.stop();
 }
+
+#[tokio::test]
+async fn simultaneous_dials_keep_one_shared_connection_and_bidirectional_delivery() {
+    let (a_blocks, mut a_receiver) = mpsc::channel(8);
+    let (b_blocks, mut b_receiver) = mpsc::channel(8);
+    let a = build_service(37_953, a_blocks, Arc::new(|_, _| Vec::new()));
+    let b = build_service(37_954, b_blocks, Arc::new(|_, _| Vec::new()));
+    a.start(0, Hash32::ZERO).await.unwrap();
+    b.start(0, Hash32::ZERO).await.unwrap();
+    let (left, right) = tokio::join!(
+        a.dial_peer("127.0.0.1:37954", 0, Hash32::ZERO),
+        b.dial_peer("127.0.0.1:37953", 0, Hash32::ZERO),
+    );
+    left.unwrap();
+    right.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(a.connected_peers_count(), 1);
+    assert_eq!(b.connected_peers_count(), 1);
+    a.broadcast_block(synthetic_block(1));
+    b.broadcast_block(synthetic_block(2));
+    let received_a = tokio::time::timeout(Duration::from_secs(2), a_receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let received_b = tokio::time::timeout(Duration::from_secs(2), b_receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received_a.header.height, 2);
+    assert_eq!(received_b.header.height, 1);
+    a.stop();
+    b.stop();
+}

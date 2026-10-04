@@ -32,6 +32,8 @@ pub struct PeerHandle {
     pub latest_block_hash: Hash32,
     pub score: PeerScore,
     sender: mpsc::Sender<NetworkMessage>,
+    preferred_direction: bool,
+    disconnect: watch::Sender<bool>,
 }
 
 impl PeerHandle {
@@ -404,9 +406,12 @@ impl P2pService {
             result = handshake_work => result?,
         };
 
+        validate_remote_id(&local_id, &remote_id)?;
+        let preferred_direction = local_id > remote_id;
         Self::run_connection_loop(
             stream,
             remote_id,
+            preferred_direction,
             remote_height,
             remote_hash,
             current_height,
@@ -445,7 +450,7 @@ impl P2pService {
         let handshake_work = async {
             // Send Handshake
             let handshake = NetworkMessage::Handshake {
-                peer_id: local_id,
+                peer_id: local_id.clone(),
                 chain_id: chain_id.clone(),
                 height: current_height,
                 latest_block_hash: latest_hash,
@@ -489,11 +494,14 @@ impl P2pService {
             result = handshake_work => result?,
         };
 
+        validate_remote_id(&local_id, &remote_id)?;
+        let preferred_direction = local_id < remote_id;
         tokio::spawn(async move {
             let _connection_slot = slot;
             Self::run_connection_loop(
                 stream,
                 remote_id,
+                preferred_direction,
                 remote_height,
                 remote_hash,
                 current_height,
@@ -516,6 +524,7 @@ impl P2pService {
     async fn run_connection_loop(
         stream: TcpStream,
         remote_id: PeerId,
+        preferred_direction: bool,
         height: u64,
         hash: Hash32,
         current_height: u64,
@@ -532,6 +541,7 @@ impl P2pService {
         let (mut reader, mut writer) = stream.into_split();
         let (outbound_tx, mut outbound_rx) = mpsc::channel::<NetworkMessage>(8);
 
+        let (disconnect, mut disconnected) = watch::channel(false);
         let handle = PeerHandle {
             peer_id: remote_id.clone(),
             remote_addr: "".to_string(),
@@ -539,15 +549,22 @@ impl P2pService {
             latest_block_hash: hash,
             score: PeerScore::default(),
             sender: outbound_tx.clone(),
+            preferred_direction,
+            disconnect,
         };
 
         // Do not let a duplicate self-asserted ID replace the live connection's routing entry.
         {
             let mut connected = peers.write();
-            if connected.contains_key(&remote_id) {
-                return Err(NetworkError::ConnectionFailed(
-                    "duplicate connected peer ID".into(),
-                ));
+            if let Some(existing) = connected.get(&remote_id) {
+                // Both ends choose the same TCP direction if they dial simultaneously.
+                // Equal-direction duplicates never replace a live connection.
+                if existing.preferred_direction || !preferred_direction {
+                    return Err(NetworkError::ConnectionFailed(
+                        "duplicate connected peer ID".into(),
+                    ));
+                }
+                existing.disconnect.send_replace(true);
             }
             connected.insert(remote_id.clone(), handle);
         }
@@ -664,6 +681,7 @@ impl P2pService {
         tokio::select! {
             biased;
             _ = wait_for_shutdown(&mut shutdown) => {},
+            _ = disconnected.changed() => {},
             _ = read_work => {},
             _ = &mut write_task => {},
         }
@@ -738,4 +756,14 @@ async fn wait_for_shutdown(shutdown: &mut ShutdownSignal) {
             return;
         }
     }
+}
+
+fn validate_remote_id(local: &PeerId, remote: &PeerId) -> Result<(), NetworkError> {
+    PeerId::new(remote.as_str())?;
+    if local == remote {
+        return Err(NetworkError::HandshakeFailed(
+            "self peer ID is not permitted".into(),
+        ));
+    }
+    Ok(())
 }

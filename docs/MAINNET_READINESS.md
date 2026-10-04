@@ -38,7 +38,8 @@ Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 
   Peer-advertised addresses must parse as socket addresses and the learned set is bounded.
 - Steady-state TCP frames enforce the configured payload limit before allocation. Outgoing
   JSON serialization is bounded by the same limit. Duplicate connected peer IDs are rejected
-  without replacing or removing the existing connection routing entry. Peer IDs remain
+  without removing another live connection routing entry. Simultaneous dials select the
+  same TCP direction on both ends and disconnect the redundant socket. Peer IDs remain
   self-asserted; authenticated transport identity still needs implementation.
 - P2P shutdown cancels listener waits, pending handshakes and active connections. Stop
   generations survive rapid restarts; failed listener binds reset the running state.
