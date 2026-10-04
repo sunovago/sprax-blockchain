@@ -92,14 +92,14 @@ pub(crate) fn execute(args: &InitArgs) -> anyhow::Result<()> {
     println!("  Home Directory : {:?}", args.home);
     println!("  Chain ID       : {}", config.chain_id);
     println!("  Environment    : {}", config.environment);
-    println!("  Config File    : {:?}", config_file_path);
-    println!("  Genesis File   : {:?}", genesis_file_path);
-    println!("  Keyring Dir    : {:?}", keyring_dir);
+    println!("  Config File    : {config_file_path:?}");
+    println!("  Genesis File   : {genesis_file_path:?}");
+    println!("  Keyring Dir    : {keyring_dir:?}");
     println!("------------------------------------------------------------");
     println!("  Pre-Funded Development Accounts:");
-    println!("  - alice   : {} (1,000,000.00 SPRX)", alice_addr);
-    println!("  - bob     : {} (  500,000.00 SPRX)", bob_addr);
-    println!("  - charlie : {} (  100,000.00 SPRX)", charlie_addr);
+    println!("  - alice   : {alice_addr} (1,000,000.00 SPRX)");
+    println!("  - bob     : {bob_addr} (  500,000.00 SPRX)");
+    println!("  - charlie : {charlie_addr} (  100,000.00 SPRX)");
     println!("============================================================");
     println!(
         "  Run 'sprax start --home {:?}' to launch the local chain.",

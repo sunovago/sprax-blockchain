@@ -48,7 +48,7 @@ pub(crate) async fn execute(args: &StartArgs) -> anyhow::Result<()> {
     println!("  Chain ID        : {}", service.chain_id());
     println!("  Current Height  : #{}", service.height());
     println!("  Latest StateRoot: {}", latest_header.state_root);
-    println!("  Latest BlockHash: {}", block_hash);
+    println!("  Latest BlockHash: {block_hash}");
     println!("  P2P Port        : {p2p_port}");
     println!("  RPC Port        : {rpc_port}");
     if let Some(peers) = &args.peers {
