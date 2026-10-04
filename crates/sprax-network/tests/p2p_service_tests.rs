@@ -31,15 +31,27 @@ fn build_service(
     inbound_block_tx: mpsc::Sender<Block>,
     block_fetch_fn: BlockFetchFn,
 ) -> P2pService {
+    build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            ..Default::default()
+        },
+        inbound_block_tx,
+        block_fetch_fn,
+    )
+}
+
+fn build_service_with_config(
+    config: NetworkConfig,
+    inbound_block_tx: mpsc::Sender<Block>,
+    block_fetch_fn: BlockFetchFn,
+) -> P2pService {
+    let port = config.p2p_port;
     let peer_id = PeerId::new(format!("node-{port}")).unwrap();
     let (tx_tx, _tx_rx) = mpsc::channel(128);
     let (vote_tx, _vote_rx) = mpsc::channel(128);
     let (proposal_tx, _proposal_rx) = mpsc::channel(128);
     let (evidence_tx, _evidence_rx) = mpsc::channel(128);
-    let config = NetworkConfig {
-        p2p_port: port,
-        ..Default::default()
-    };
     P2pService::new(
         peer_id,
         "sprax-devnet-1".to_string(),
@@ -51,6 +63,60 @@ fn build_service(
         evidence_tx,
         block_fetch_fn,
     )
+}
+
+#[tokio::test]
+async fn oversized_handshakes_are_closed_and_pending_connections_count_towards_the_limit() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let port = 37_950;
+    let (blocks, _receiver) = mpsc::channel(8);
+    let service = build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            max_inbound_peers: 1,
+            max_outbound_peers: 0,
+            ..Default::default()
+        },
+        blocks,
+        Arc::new(|_, _| Vec::new()),
+    );
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let mut first = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    first.write_all(&u32::MAX.to_be_bytes()).await.unwrap();
+    let mut byte = [0u8; 1];
+    let closed = tokio::time::timeout(Duration::from_secs(2), first.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(
+        closed.is_err() || closed.unwrap() == 0,
+        "oversized handshake must be rejected before allocation"
+    );
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let silent = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut excess = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(2), excess.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(
+        closed.is_err() || closed.unwrap() == 0,
+        "a pending handshake must occupy a connection slot"
+    );
+    assert!(service
+        .dial_peer("127.0.0.1:1", 0, Hash32::ZERO)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("connection limit"));
+    drop(silent);
+    service.stop();
 }
 
 #[tokio::test]

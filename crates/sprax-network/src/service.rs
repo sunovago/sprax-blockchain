@@ -19,7 +19,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::mpsc,
+    sync::{mpsc, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::{debug, info, warn};
 
@@ -50,6 +50,8 @@ pub struct P2pService {
     local_peer_id: PeerId,
     chain_id: String,
     config: NetworkConfig,
+    inbound_slots: Arc<Semaphore>,
+    outbound_slots: Arc<Semaphore>,
     peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
     known_addresses: Arc<RwLock<HashSet<String>>>,
     is_running: Arc<AtomicBool>,
@@ -84,6 +86,8 @@ impl P2pService {
         inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Self {
+        let inbound_slots = Arc::new(Semaphore::new(config.max_inbound_peers.min(1024)));
+        let outbound_slots = Arc::new(Semaphore::new(config.max_outbound_peers.min(1024)));
         let mut known = HashSet::new();
         for peer in &config.bootstrap_peers {
             known.insert(peer.clone());
@@ -93,6 +97,8 @@ impl P2pService {
             local_peer_id,
             chain_id,
             config,
+            inbound_slots,
+            outbound_slots,
             peers: Arc::new(RwLock::new(HashMap::new())),
             known_addresses: Arc::new(RwLock::new(known)),
             is_running: Arc::new(AtomicBool::new(false)),
@@ -171,6 +177,11 @@ impl P2pService {
         current_height: u64,
         latest_hash: Hash32,
     ) -> Result<(), NetworkError> {
+        let slot = Arc::clone(&self.outbound_slots)
+            .try_acquire_owned()
+            .map_err(|_| {
+                NetworkError::ConnectionFailed("outbound connection limit reached".into())
+            })?;
         let addr: SocketAddr = addr_str.parse().map_err(|e| {
             NetworkError::InvalidAddress(format!("invalid socket address '{addr_str}': {e}"))
         })?;
@@ -198,6 +209,7 @@ impl P2pService {
             self.inbound_proposal_tx.clone(),
             self.inbound_evidence_tx.clone(),
             Arc::clone(&self.block_fetch_fn),
+            slot,
         )
         .await
     }
@@ -236,12 +248,17 @@ impl P2pService {
         let proposal_in = self.inbound_proposal_tx.clone();
         let evidence_in = self.inbound_evidence_tx.clone();
         let fetch_fn = Arc::clone(&self.block_fetch_fn);
+        let inbound_slots = Arc::clone(&self.inbound_slots);
 
         // Spawn Inbound TCP Listener Loop
         tokio::spawn(async move {
             while is_running.load(Ordering::SeqCst) {
                 match listener.accept().await {
                     Ok((stream, remote_addr)) => {
+                        let Ok(slot) = Arc::clone(&inbound_slots).try_acquire_owned() else {
+                            drop(stream);
+                            continue;
+                        };
                         debug!(addr = %remote_addr, "Accepted incoming P2P connection");
                         let p = Arc::clone(&peers);
                         let k = Arc::clone(&known_addresses);
@@ -255,6 +272,7 @@ impl P2pService {
                         let fetch_fn = Arc::clone(&fetch_fn);
 
                         tokio::spawn(async move {
+                            let _connection_slot = slot;
                             if let Err(e) = Self::handle_inbound_connection(
                                 stream,
                                 l_id,
@@ -332,7 +350,12 @@ impl P2pService {
                     )));
                 }
                 if let Some(addr) = listen_addr {
-                    known.write().insert(addr);
+                    if addr.len() <= 128 && addr.parse::<SocketAddr>().is_ok() {
+                        let mut known = known.write();
+                        if known.len() < 1024 {
+                            known.insert(addr);
+                        }
+                    }
                 }
                 (peer_id, height, latest_block_hash)
             }
@@ -384,6 +407,7 @@ impl P2pService {
         inbound_proposal: mpsc::Sender<SignedProposal>,
         inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
+        slot: OwnedSemaphorePermit,
     ) -> Result<(), NetworkError> {
         // Send Handshake
         let handshake = NetworkMessage::Handshake {
@@ -420,20 +444,24 @@ impl P2pService {
             }
         };
 
-        tokio::spawn(Self::run_connection_loop(
-            stream,
-            remote_id,
-            remote_height,
-            remote_hash,
-            current_height,
-            peers,
-            inbound_tx,
-            inbound_block,
-            inbound_vote,
-            inbound_proposal,
-            inbound_evidence,
-            block_fetch_fn,
-        ));
+        tokio::spawn(async move {
+            let _connection_slot = slot;
+            Self::run_connection_loop(
+                stream,
+                remote_id,
+                remote_height,
+                remote_hash,
+                current_height,
+                peers,
+                inbound_tx,
+                inbound_block,
+                inbound_vote,
+                inbound_proposal,
+                inbound_evidence,
+                block_fetch_fn,
+            )
+            .await
+        });
         Ok(())
     }
 
@@ -598,6 +626,11 @@ impl P2pService {
             .await
             .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
         let len = u32::from_be_bytes(len_bytes) as usize;
+        if len == 0 || len > 4096 {
+            return Err(NetworkError::HandshakeFailed(
+                "handshake frame exceeds the 4 KiB limit".into(),
+            ));
+        }
         let mut buf = vec![0u8; len];
         stream
             .read_exact(&mut buf)

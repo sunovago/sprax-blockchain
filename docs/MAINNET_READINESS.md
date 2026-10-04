@@ -33,6 +33,9 @@ Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 
   handles are allowed. Scans use the requested key range and contract prefix.
 - Live P2P channels are bounded. Archive catch-up serves one block per response with
   inbound backpressure. Mempool admission is capped at 128 transactions / 2 MiB per transaction.
+- P2P handshakes reject frames over 4 KiB before allocating. Configured inbound/outbound
+  connection limits also count pending handshakes; a direction is capped at 1,024 slots.
+  Peer-advertised addresses must parse as socket addresses and the learned set is bounded.
 - The browser wallet persists only an encrypted vault, supports unlock and encrypted backups,
   and locks on tab hide or five minutes of inactivity. SDK address hashing, canonical
   transaction signing, and REST address/balance handling match the Rust node. Both Ed25519
