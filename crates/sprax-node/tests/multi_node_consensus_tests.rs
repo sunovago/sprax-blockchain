@@ -372,14 +372,16 @@ async fn test_double_sign_triggers_real_slashing_across_network() {
         );
     }
 
-    // Alice's own round-driving loop must not have been corrupted/frozen by the forged votes
-    // (bob is a deliberate non-validating observer in this test — see setup comment — and
-    // never mines, so only alice's height is a meaningful liveness signal here).
-    assert!(
-        services[0].height() >= 1,
-        "alice's consensus loop must keep advancing despite the forged votes, height={}",
-        services[0].height()
-    );
+    // Alice alone has 100k of the 150k remaining active voting power after Charlie
+    // is tombstoned. Exactly two-thirds is insufficient: Bob is deliberately not
+    // voting, so proposal construction must not advance finalized height.
+    for service in &services {
+        assert_eq!(
+            service.height(),
+            0,
+            "a minority/no-quorum proposal must never become finalized"
+        );
+    }
 
     for service in &services {
         service.stop().await.unwrap();
