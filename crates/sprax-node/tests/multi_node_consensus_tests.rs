@@ -14,6 +14,8 @@ fn validator_config(
 ) -> NodeConfig {
     let mut config = NodeConfig::for_environment(Environment::Development, home);
     config.network.p2p_port = p2p_port;
+    // Each node must bind its own RPC socket; a failed bind is now a startup error.
+    config.rpc.json_rpc_port = 0;
     config.network.bootstrap_peers = peer_ports
         .iter()
         .map(|p| format!("127.0.0.1:{p}"))
@@ -47,6 +49,8 @@ async fn start_observer_node(
 ) -> NodeService {
     let mut config = NodeConfig::for_environment(Environment::Development, home.clone());
     config.network.p2p_port = p2p_port;
+    // Each node must bind its own RPC socket; a failed bind is now a startup error.
+    config.rpc.json_rpc_port = 0;
     config.network.bootstrap_peers = peer_ports
         .iter()
         .map(|p| format!("127.0.0.1:{p}"))
