@@ -423,9 +423,9 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
                 .len();
             let next_gas = reserved_gas.checked_add(tx.body.fee.gas_limit);
             let next_bytes = reserved_bytes.checked_add(bytes);
-            if !next_gas.is_some_and(|gas| gas <= self.genesis.consensus_params.max_block_gas)
-                || !next_bytes
-                    .is_some_and(|size| size <= self.genesis.consensus_params.max_block_size_bytes)
+            if next_gas.is_none_or(|gas| gas > self.genesis.consensus_params.max_block_gas)
+                || next_bytes
+                    .is_none_or(|size| size > self.genesis.consensus_params.max_block_size_bytes)
             {
                 self.mempool.push(tx);
                 continue;
@@ -566,7 +566,7 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
             .transactions
             .iter()
             .try_fold(0u64, |sum, tx| sum.checked_add(tx.body.fee.gas_limit));
-        if !reserved_gas.is_some_and(|gas| gas <= self.genesis.consensus_params.max_block_gas) {
+        if reserved_gas.is_none_or(|gas| gas > self.genesis.consensus_params.max_block_gas) {
             return Err(CoreError::ModuleError {
                 module: "consensus".into(),
                 reason: "block exceeds gas limit".into(),

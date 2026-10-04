@@ -117,6 +117,18 @@ fn real_wasm_executes_replicates_rolls_back_and_survives_restart() {
     assert!(proposed.body.transactions.is_empty());
     assert_eq!(producer.state_root().unwrap(), root);
     assert_eq!(producer.get_account(&key.address()).unwrap().nonce, 3);
+    let funded = transaction(
+        &key,
+        3,
+        TxMessage::ContractCall {
+            contract: address,
+            data: br#"{"increment":{}}"#.to_vec(),
+            funds: sprax_types::Amount::from_atto(10),
+        },
+    );
+    let error = producer.submit_transaction(funded).unwrap_err();
+    assert!(error.to_string().contains("bank submessage support"));
+    assert_eq!(producer.state_root().unwrap(), root);
     let mut exhausted = transaction(
         &key,
         3,

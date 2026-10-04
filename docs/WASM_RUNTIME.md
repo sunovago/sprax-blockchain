@@ -46,7 +46,8 @@ at most two concurrent contract queries.
 
 ## Remaining work
 
-This execution profile rejects chain queries and contract submessages. Replies,
+This execution profile rejects chain queries, contract submessages, and nonzero
+attached contract funds until bank submessages can release them. Replies,
 migrations, sudo, IBC, event indexing, compilation caching, resource-bounded storage
 iteration, and broader execution-equivalence/performance testing remain unfinished.
 The VM implementation does not establish overall mainnet readiness; see

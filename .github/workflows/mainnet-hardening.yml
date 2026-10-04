@@ -58,6 +58,12 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"
+      - name: Build wallet SDK dependency
+        if: matrix.directory == 'apps/web-wallet'
+        working-directory: packages/sprax-wallet-core
+        run: |
+          npm ci
+          npm run build
       - run: npm ci
       - run: npm run build
       - run: npm run test --if-present

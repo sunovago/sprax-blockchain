@@ -80,6 +80,16 @@ impl TxExecutor {
             });
         }
         for msg in &tx.body.messages {
+            if let TxMessage::InstantiateContract { funds, .. }
+            | TxMessage::ContractCall { funds, .. } = msg
+            {
+                if !funds.is_zero() {
+                    return Err(CoreError::ModuleError {
+                        module: "wasm".into(),
+                        reason: "contract funds require bank submessage support".into(),
+                    });
+                }
+            }
             if let TxMessage::Transfer { amount, .. }
             | TxMessage::Delegate { amount, .. }
             | TxMessage::Unbond { amount, .. } = msg
