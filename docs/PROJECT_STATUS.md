@@ -1,6 +1,6 @@
 # SPRX Protocol: Master Project Status & Phase Tracking Matrix
-**Last Updated:** 2026-08-20  
-**Repository Posture:** INCOMPLETE — current hardening is under verification.
+**Last Updated:** 2026-10-04  
+**Repository Posture:** INCOMPLETE — core hardening and the basic real WASM slice passed CI.
 **Mainnet Readiness:** NOT READY — see [current readiness](MAINNET_READINESS.md).
 
 The phase table below is historical and does not establish current production readiness.

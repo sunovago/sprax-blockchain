@@ -35,10 +35,12 @@ forgery/duplication/replay, and invalid validator sets.
 
 Windows Application Control blocks local Cargo-generated build executables with OS error 4551.
 Verification uses the authorized GitHub Actions Linux environment on
-`codex/mainnet-hardening-20261004`. Earlier core hardening revisions passed all workspace
-tests; the subsequent real WASM extension is undergoing compilation, integration testing,
-and strict lint checks. Follow the final run for the reviewed revision, rather than assuming
-earlier passing results cover later changes.
+`codex/mainnet-hardening-20261004`. Revision `bd9e105ce3defaaf772b46fc93ce4d0ce3e8c1b1`
+passed formatting, all workspace tests (including the compiled real WASM fixture), strict
+Clippy with warnings denied, and the admin/explorer/web-wallet/SDK build and test jobs.
+[Verified GitHub Actions run](https://github.com/sunovago/sprax-blockchain/actions/runs/37187489667).
+Subsequent backend dependency/documentation changes require their own final CI result;
+passing this revision does not establish overall mainnet readiness.
 
 ```sh
 cargo fmt --all -- --check
@@ -54,10 +56,11 @@ verify the chain changes above or a live deployment.
 
 ## Remaining engineering gates
 
-1. Execute all Rust tests and static checks; fix compilation, behavioral, and network failures.
-2. Verify the implemented real CosmWasm slice with the compiled counter fixture, cross-node
-   state-root equivalence, disk restart, failed-write rollback, and gas-exhaustion rollback.
-   Complete the required chain query/submessage/migration capabilities, contract events,
+1. Extend verification with adversarial/fuzz tests, cross-platform execution equivalence,
+   resource-exhaustion tests, and operator-run recovery/soak tests. Current regression and
+   strict static checks passed for the revision above.
+2. The compiled counter, replica roots, disk restart, failed-write rollback, and gas-exhaustion
+   rollback are verified. Complete chain query/submessage/migration capabilities, contract events,
    resource-bounded iteration, compilation caching, and execution performance testing.
 3. Complete BFT round synchronization, locked proposal handling, authenticated proposals,
    durable signing protection across restarts, commit validation during historical catch-up,
@@ -82,3 +85,10 @@ verify the chain changes above or a live deployment.
 - Stable public testnet evidence and an operator-run key/genesis ceremony.
 
 Passing local tests or producing configuration files alone does not close these gates.
+
+## Application dependency work
+
+The SDK and web-wallet npm audits reported zero findings after development dependency
+updates. Admin/explorer retain high-severity findings in the Tailwind 3 dependency tree;
+the local Telegram miniapp also requires its own framework/security upgrade. A successful
+build does not mean all application dependency findings are resolved.

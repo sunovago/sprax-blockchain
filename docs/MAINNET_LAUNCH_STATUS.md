@@ -1,10 +1,11 @@
 # SPRAX Mainnet Launch Status
-**Last Updated:** 2026-08-20
+**Last Updated:** 2026-10-04
 **Status:** NOT READY FOR MAINNET — see [current readiness](MAINNET_READINESS.md)
 
 The gate table below is historical and has not been independently verified. It must not be
-used to approve a mainnet launch. Real contract execution, consensus hardening, executable
-Rust verification, actual validator genesis, and independent security review remain open.
+used to approve a mainnet launch. Basic real contract execution and Rust regression/static
+checks passed the reviewed CI revision. Full consensus hardening, actual validator genesis,
+deployment validation, and independent security review remain open.
 
 ---
 
