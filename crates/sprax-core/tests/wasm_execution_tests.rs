@@ -1,6 +1,6 @@
 use sprax_core::{ChainLedger, GenesisConfig};
 use sprax_crypto::Ed25519Keypair;
-use sprax_storage::RedbStore;
+use sprax_storage::{MemKVStore, OverlayStore, RedbStore};
 use sprax_types::{Address, ChainId, Hash32, KeyType, Transaction, TxBody, TxFee, TxMessage};
 
 fn fixture() -> Vec<u8> {
@@ -32,6 +32,10 @@ fn transaction(key: &Ed25519Keypair, nonce: u64, message: TxMessage) -> Transact
 
 #[test]
 fn real_wasm_executes_replicates_rolls_back_and_survives_restart() {
+    let wasm = fixture();
+    sprax_wasm::CosmWasmRuntime
+        .store_code(&OverlayStore::new(MemKVStore::new()), &wasm, 4_959_000)
+        .expect("compiled fixture must pass VM upload validation");
     let key = Ed25519Keypair::from_seed(&[88; 32]);
     let mut genesis = GenesisConfig::default_development();
     genesis.accounts[0].address = key.address();
@@ -66,7 +70,7 @@ fn real_wasm_executes_replicates_rolls_back_and_survives_restart() {
         &mut producer,
         &mut follower,
         TxMessage::StoreCode {
-            wasm_bytecode: fixture(),
+            wasm_bytecode: wasm,
         },
     ))
     .unwrap();
