@@ -134,8 +134,7 @@ impl<S: KVStore> Storage for ChainStorage<S> {
             .into_iter()
             .map(|(key, value)| (key[self.prefix.len()..].to_vec(), value))
             .filter(|(key, _)| {
-                start.is_none_or(|s| key.as_slice() >= s)
-                    && end.is_none_or(|e| key.as_slice() < e)
+                start.is_none_or(|s| key.as_slice() >= s) && end.is_none_or(|e| key.as_slice() < e)
             })
             .collect();
         let cost = Self::cost(records.iter().map(|(k, v)| k.len() + v.len()).sum());
