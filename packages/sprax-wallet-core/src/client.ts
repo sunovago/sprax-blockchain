@@ -25,7 +25,7 @@ export const NETWORKS: Record<string, NetworkConfig> = {
   mainnet: {
     id: "mainnet",
     name: "SPRX Mainnet",
-    chainId: "sprax-1",
+    chainId: "sprax-mainnet-1",
     rpcUrl: "https://rpc.sprax.io",
     p2pPort: 26656,
     explorerUrl: "https://explorer.sprax.io",
@@ -61,32 +61,19 @@ export class SpraxClient {
         throw new Error(`HTTP ${resp.status}: ${resp.statusText}`);
       }
       const data = await resp.json();
-      const attoStr = data.balance_atto || "0";
+      const attoStr = data.balance_atto;
+      if (typeof attoStr !== "string" || !/^[0-9]+$/.test(attoStr)) throw new Error("Node returned an invalid balance");
       const sprxStr = TransactionBuilder.attoToSprx(BigInt(attoStr));
-      const sprxFloat = parseFloat(sprxStr);
 
       return {
         atto: attoStr,
         sprx: sprxStr,
         fiatEstimates: {
-          usd: (sprxFloat * 4.5).toFixed(2),
-          inr: (sprxFloat * 375.0).toFixed(2),
-          eur: (sprxFloat * 4.15).toFixed(2),
-          jpy: (sprxFloat * 650.0).toFixed(0),
+          usd: "Unavailable", inr: "Unavailable", eur: "Unavailable", jpy: "Unavailable",
         },
       };
-    } catch {
-      // Offline fallback mock data for testing/disconnected modes
-      return {
-        atto: "0",
-        sprx: "0",
-        fiatEstimates: {
-          usd: "0.00",
-          inr: "0.00",
-          eur: "0.00",
-          jpy: "0",
-        },
-      };
+    } catch (error) {
+      throw new Error(`Unable to read balance: ${error instanceof Error ? error.message : "network unavailable"}`);
     }
   }
 
@@ -96,11 +83,12 @@ export class SpraxClient {
   public async getAccountNonce(address: string): Promise<number> {
     try {
       const resp = await fetch(`${this.network.rpcUrl}/accounts/${address}/nonce`);
-      if (!resp.ok) return 0;
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
-      return data.nonce || 0;
-    } catch {
-      return 0;
+      if (!Number.isSafeInteger(data.nonce) || data.nonce < 0) throw new Error("Node returned an invalid nonce");
+      return data.nonce;
+    } catch (error) {
+      throw new Error(`Unable to read account nonce: ${error instanceof Error ? error.message : "network unavailable"}`);
     }
   }
 
@@ -120,6 +108,9 @@ export class SpraxClient {
     }
 
     const data = await resp.json();
+    if (data.success !== true || typeof data.tx_hash !== "string" || !/^0x[0-9a-f]{64}$/i.test(data.tx_hash)) {
+      throw new Error("Node did not accept the transaction");
+    }
     return data.tx_hash;
   }
 
@@ -129,17 +120,18 @@ export class SpraxClient {
   public async getTransactionReceipt(txHash: string): Promise<TxReceipt | null> {
     try {
       const resp = await fetch(`${this.network.rpcUrl}/txs/${txHash}`);
-      if (!resp.ok) return null;
+      if (resp.status === 404) return null;
+      if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
       const data = await resp.json();
       return {
         txHash: data.hash,
         blockHeight: data.height,
-        success: data.receipt?.success ?? true,
-        gasUsed: data.receipt?.gas_used ?? 21000,
+        success: data.receipt?.success === true,
+        gasUsed: data.receipt?.gas_used ?? 0,
         logs: data.receipt?.logs ?? [],
       };
-    } catch {
-      return null;
+    } catch (error) {
+      throw new Error(`Unable to read transaction receipt: ${error instanceof Error ? error.message : "network unavailable"}`);
     }
   }
 }

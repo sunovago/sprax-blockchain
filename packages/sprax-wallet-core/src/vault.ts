@@ -1,150 +1,107 @@
-import { pbkdf2 } from "@noble/hashes/pbkdf2";
-import { sha256 } from "@noble/hashes/sha256";
-import { HDWallet } from "./hd_wallet";
+﻿import { HDWallet } from "./hd_wallet";
+import { MnemonicUtil } from "./mnemonic";
 import { Account, EncryptedVault } from "./types";
 
-/**
- * Secure encrypted vault storage for wallet mnemonics using AES-256-GCM / PBKDF2.
- */
+/** AES-256-GCM vaults. Earlier version 1 vaults with 100,000 KDF rounds remain readable. */
 export class WalletVault {
-  public static readonly DEFAULT_ITERATIONS = 100000;
+  public static readonly DEFAULT_ITERATIONS = 600000;
 
-  /**
-   * Helper to convert Uint8Array to hex.
-   */
+  private static crypto(): Crypto {
+    if (!globalThis.crypto?.subtle || !globalThis.crypto?.getRandomValues) {
+      throw new Error("Secure WebCrypto is required. Open the wallet over HTTPS or localhost.");
+    }
+    return globalThis.crypto;
+  }
+
   private static bytesToHex(bytes: Uint8Array): string {
-    return Array.from(bytes)
-      .map((b) => b.toString(16).padStart(2, "0"))
-      .join("");
+    return Array.from(bytes, (b) => b.toString(16).padStart(2, "0")).join("");
   }
 
-  /**
-   * Helper to convert hex to Uint8Array.
-   */
-  private static hexToBytes(hex: string): Uint8Array {
-    const clean = hex.startsWith("0x") ? hex.slice(2) : hex;
-    const match = clean.match(/.{1,2}/g);
-    return new Uint8Array(match ? match.map((byte) => parseInt(byte, 16)) : []);
+  private static hexToBytes(hex: string): Uint8Array<ArrayBuffer> {
+    return Uint8Array.from(hex.match(/.{2}/g)!, (byte) => parseInt(byte, 16));
   }
 
-  /**
-   * Encrypts a mnemonic phrase with a user password.
-   */
-  public static async encrypt(
-    mnemonic: string,
-    password: string,
-    accountCount: number = 1
-  ): Promise<EncryptedVault> {
-    const salt = new Uint8Array(16);
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      crypto.getRandomValues(salt);
-    } else {
-      for (let i = 0; i < 16; i++) salt[i] = Math.floor(Math.random() * 256);
+  /** Validate untrusted backup data before allocating buffers or running a KDF. */
+  public static validate(value: unknown): asserts value is EncryptedVault {
+    if (!value || typeof value !== "object") throw new Error("Invalid wallet vault");
+    const vault = value as EncryptedVault;
+    const hex = (value: unknown, min: number, max: number) =>
+      typeof value === "string" && value.length >= min && value.length <= max &&
+      value.length % 2 === 0 && /^[0-9a-f]+$/i.test(value);
+    if (vault.version !== 1 || !hex(vault.saltHex, 32, 32) || !hex(vault.ivHex, 24, 24) ||
+        !hex(vault.cipherTextHex, 32, 4096) || !Number.isInteger(vault.kdfIterations) ||
+        vault.kdfIterations < 100000 || vault.kdfIterations > 2000000 ||
+        !Array.isArray(vault.accounts) || vault.accounts.length < 1 || vault.accounts.length > 100) {
+      throw new Error("Invalid or unsupported wallet vault");
     }
+    // Metadata is display-only. Derive the signing account from the decrypted seed.
+  }
 
-    const iv = new Uint8Array(12);
-    if (typeof crypto !== "undefined" && crypto.getRandomValues) {
-      crypto.getRandomValues(iv);
-    } else {
-      for (let i = 0; i < 12; i++) iv[i] = Math.floor(Math.random() * 256);
+  private static async key(password: string, salt: Uint8Array<ArrayBuffer>, iterations: number): Promise<CryptoKey> {
+    const crypto = this.crypto();
+    const passwordBytes = new TextEncoder().encode(password);
+    try {
+      const material = await crypto.subtle.importKey("raw", passwordBytes, "PBKDF2", false, ["deriveKey"]);
+      return await crypto.subtle.deriveKey(
+        { name: "PBKDF2", hash: "SHA-256", salt, iterations }, material,
+        { name: "AES-GCM", length: 256 }, false, ["encrypt", "decrypt"]
+      );
+    } finally {
+      passwordBytes.fill(0);
     }
+  }
 
-    // Derive 256-bit encryption key
-    const derivedKeyArray = pbkdf2(
-      sha256,
-      new TextEncoder().encode(password),
-      salt,
-      { c: this.DEFAULT_ITERATIONS, dkLen: 32 }
-    );
-    // Convert to standard ArrayBuffer to satisfy Web Crypto API type constraints
-    const derivedKey = derivedKeyArray.slice().buffer;
-
-    // Derive initial accounts to cache in vault metadata (without private keys)
-    const wallet = HDWallet.fromMnemonic(mnemonic);
+  public static async encrypt(mnemonic: string, password: string, accountCount = 1): Promise<EncryptedVault> {
+    const crypto = this.crypto();
+    if (!MnemonicUtil.validate(mnemonic)) throw new Error("Invalid recovery phrase");
+    if (password.length < 8 || password.length > 1024) throw new Error("Password must contain 8 to 1024 characters");
+    if (!Number.isInteger(accountCount) || accountCount < 1 || accountCount > 100) throw new Error("Invalid account count");
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const iv = crypto.getRandomValues(new Uint8Array(12));
+    const key = await this.key(password, salt, this.DEFAULT_ITERATIONS);
     const accounts: Account[] = [];
-    for (let i = 0; i < accountCount; i++) {
-      const { account } = wallet.deriveAccount(i);
-      accounts.push(account);
+    const wallet = HDWallet.fromMnemonic(mnemonic);
+    try {
+      for (let i = 0; i < accountCount; i++) {
+        const derived = wallet.deriveAccount(i);
+        accounts.push(derived.account);
+        derived.privateKey.fill(0);
+      }
+    } finally {
+      wallet.destroy();
     }
-
-    // Encrypt payload (using Web Crypto AES-GCM if available, or fallback XOR/HMAC authenticated stream)
-    const plaintext = new TextEncoder().encode(mnemonic);
-    let cipherBytes: Uint8Array;
-
-    if (typeof crypto !== "undefined" && crypto.subtle) {
-      const cryptoKey = await crypto.subtle.importKey(
-        "raw",
-        derivedKey as BufferSource,
-        { name: "AES-GCM" },
-        false,
-        ["encrypt"]
-      );
-      const encryptedBuffer = await crypto.subtle.encrypt(
-        { name: "AES-GCM", iv: iv as unknown as BufferSource },
-        cryptoKey,
-        plaintext as unknown as BufferSource
-      );
-      cipherBytes = new Uint8Array(encryptedBuffer);
-    } else {
-      throw new Error(
-        "Cryptographic environment error: WebCrypto SubtleCrypto is required for AES-256-GCM vault encryption"
-      );
+    const plaintext = new TextEncoder().encode(mnemonic.trim().toLowerCase());
+    try {
+      const encrypted = await crypto.subtle.encrypt({ name: "AES-GCM", iv }, key, plaintext);
+      return {
+        version: 1, cipherTextHex: this.bytesToHex(new Uint8Array(encrypted)),
+        saltHex: this.bytesToHex(salt), ivHex: this.bytesToHex(iv),
+        kdfIterations: this.DEFAULT_ITERATIONS, accounts,
+      };
+    } finally {
+      plaintext.fill(0);
     }
-
-    return {
-      version: 1,
-      cipherTextHex: this.bytesToHex(cipherBytes),
-      saltHex: this.bytesToHex(salt),
-      ivHex: this.bytesToHex(iv),
-      kdfIterations: this.DEFAULT_ITERATIONS,
-      accounts,
-    };
   }
 
-  /**
-   * Decrypts an EncryptedVault to recover the original mnemonic phrase.
-   */
   public static async decrypt(vault: EncryptedVault, password: string): Promise<string> {
-    const salt = this.hexToBytes(vault.saltHex);
-    const iv = this.hexToBytes(vault.ivHex);
-    const cipherBytes = this.hexToBytes(vault.cipherTextHex);
-
-    const derivedKeyArray = pbkdf2(
-      sha256,
-      new TextEncoder().encode(password),
-      salt,
-      { c: vault.kdfIterations, dkLen: 32 }
-    );
-    // Convert to standard ArrayBuffer to satisfy Web Crypto API type constraints
-    const derivedKey = derivedKeyArray.slice().buffer;
-
-    let decryptedBytes: Uint8Array;
-
-    if (typeof crypto !== "undefined" && crypto.subtle) {
-      try {
-        const cryptoKey = await crypto.subtle.importKey(
-          "raw",
-          derivedKey as BufferSource,
-          { name: "AES-GCM" },
-          false,
-          ["decrypt"]
-        );
-        const decryptedBuffer = await crypto.subtle.decrypt(
-          { name: "AES-GCM", iv: iv as unknown as BufferSource },
-          cryptoKey,
-          cipherBytes as unknown as BufferSource
-        );
-        decryptedBytes = new Uint8Array(decryptedBuffer);
-      } catch {
-        throw new Error("Incorrect password or corrupted wallet vault");
-      }
-    } else {
-      throw new Error(
-        "Cryptographic environment error: WebCrypto SubtleCrypto is required for AES-256-GCM vault decryption"
-      );
+    this.validate(vault);
+    if (password.length > 1024) throw new Error("Password is too long");
+    const crypto = this.crypto();
+    const key = await this.key(password, this.hexToBytes(vault.saltHex), vault.kdfIterations);
+    let plaintext: Uint8Array;
+    try {
+      plaintext = new Uint8Array(await crypto.subtle.decrypt(
+        { name: "AES-GCM", iv: this.hexToBytes(vault.ivHex) }, key, this.hexToBytes(vault.cipherTextHex)
+      ));
+    } catch {
+      throw new Error("Incorrect password or corrupted wallet vault");
     }
-
-    const mnemonic = new TextDecoder().decode(decryptedBytes);
-    return mnemonic;
+    try {
+      const mnemonic = new TextDecoder("utf-8", { fatal: true }).decode(plaintext);
+      if (!MnemonicUtil.validate(mnemonic)) throw new Error("Invalid recovery phrase in vault");
+      return mnemonic;
+    } finally {
+      plaintext.fill(0);
+    }
   }
 }

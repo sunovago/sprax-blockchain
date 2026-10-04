@@ -527,7 +527,7 @@ async fn handle_account_balance(
             StatusCode::OK,
             Json(json!({
                 "address": address_str,
-                "balance_atto": acc.balance.to_string(),
+                "balance_atto": acc.balance.as_atto().to_string(),
                 "nonce": acc.nonce,
             })),
         ),
@@ -688,12 +688,7 @@ async fn handle_rest_get_block(
 // ==========================================
 
 fn parse_address(s: &str) -> Option<Address> {
-    let s = s.trim();
-    if s.starts_with("sprx") {
-        Address::from_bech32(s).ok()
-    } else {
-        Address::from_hex(s).ok()
-    }
+    Address::parse(s.trim()).ok()
 }
 
 fn parse_transaction(val: Value) -> Result<Transaction, String> {
@@ -835,6 +830,46 @@ fn parse_bytes_field(val: Option<&Value>) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn wallet_sdk_signatures_execute_on_the_rust_ledger() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/wallet-transactions.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let tx = parse_transaction(fixture["signed"].clone()).unwrap();
+            let expected: Vec<u8> = serde_json::from_value(fixture["sign_bytes"].clone()).unwrap();
+            assert_eq!(
+                tx.sign_bytes().unwrap(),
+                expected,
+                "SDK signing bytes must match Rust serialization"
+            );
+            assert_eq!(
+                parse_address(&tx.body.sender.to_bech32().unwrap()),
+                Some(tx.body.sender)
+            );
+            let mut genesis = sprax_core::GenesisConfig::default_development();
+            genesis.accounts.push(sprax_core::GenesisAccount {
+                name: "SDK sender".into(),
+                address: tx.body.sender,
+                initial_balance: Amount::from_sprx_whole(10).unwrap(),
+            });
+            let mut ledger = sprax_core::ChainLedger::init_from_genesis(genesis).unwrap();
+            ledger.submit_transaction(tx.clone()).unwrap();
+            let block = ledger.mine_block(Address::ZERO).unwrap();
+            assert_eq!(block.body.transactions.len(), 1);
+            let recipient = match tx.body.messages[0] {
+                TxMessage::Transfer { to, .. } => to,
+                _ => panic!("fixture must transfer funds"),
+            };
+            assert_eq!(
+                ledger.get_account(&recipient).unwrap().balance.as_atto(),
+                1_000_000_000_000_000_001
+            );
+            assert_eq!(ledger.get_account(&tx.body.sender).unwrap().nonce, 1);
+        }
+    }
 
     #[tokio::test]
     async fn test_json_rpc_status_and_account_handlers() {

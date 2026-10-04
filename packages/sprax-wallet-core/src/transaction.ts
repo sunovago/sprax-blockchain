@@ -14,6 +14,9 @@ export class TransactionBuilder {
    * Converts a whole or decimal SPRX string (e.g. "10.5") into base atomic atto-SPRX (BigInt).
    */
   public static sprxToAtto(sprxStr: string): bigint {
+    if (!/^(?:0|[1-9][0-9]*)(?:\.[0-9]{1,18})?$/.test(sprxStr.trim())) {
+      throw new Error("Amount must be a nonnegative decimal with at most 18 fractional digits");
+    }
     const parts = sprxStr.trim().split(".");
     if (parts.length > 2) {
       throw new Error(`Invalid SPRX decimal amount format: ${sprxStr}`);
@@ -24,7 +27,9 @@ export class TransactionBuilder {
       const fracStr = parts[1].padEnd(18, "0").slice(0, 18);
       fraction = BigInt(fracStr);
     }
-    return whole + fraction;
+    const amount = whole + fraction;
+    if (amount > (1n << 128n) - 1n) throw new Error("Amount exceeds the chain's u128 limit");
+    return amount;
   }
 
   /**
@@ -54,6 +59,11 @@ export class TransactionBuilder {
    * Constructs the deterministic canonical sign bytes for a transaction.
    */
   public static getSignBytes(req: SendTxRequest, chainId: string): Uint8Array {
+    if (!/^[a-z0-9_-]{1,64}$/.test(chainId)) throw new Error("Invalid chain ID");
+    if (!Number.isSafeInteger(req.nonce) || req.nonce < 0 ||
+        !Number.isSafeInteger(req.timeoutHeight ?? 0) || (req.timeoutHeight ?? 0) < 0) {
+      throw new Error("Nonce and timeout height must be nonnegative safe integers");
+    }
     if (!AddressUtil.isValidAddress(req.fromAddress)) {
       throw new Error(`Invalid sender address: ${req.fromAddress}`);
     }
@@ -67,25 +77,25 @@ export class TransactionBuilder {
     }
 
     const fee = req.fee || this.defaultFee();
+    if (!/^[0-9]+$/.test(fee.amountAtto) || BigInt(fee.amountAtto) > (1n << 128n) - 1n ||
+        !Number.isSafeInteger(fee.gasLimit) || fee.gasLimit <= 0) throw new Error("Invalid fee");
 
+    // Field order, Bech32 addresses, enum fields and priority_fee match Rust TxBody serde exactly.
     const canonicalObj = {
       chain_id: chainId,
-      fee: {
-        amount: fee.amountAtto,
-        gas_limit: fee.gasLimit,
-      },
-      memo: req.memo || "",
+      sender: AddressUtil.toBech32(AddressUtil.parseToBytes(req.fromAddress)),
+      nonce: req.nonce,
       messages: [
         {
           Transfer: {
+            to: AddressUtil.toBech32(AddressUtil.parseToBytes(req.toAddress)),
             amount: attoAmount.toString(),
-            to: AddressUtil.toHex(AddressUtil.parseToBytes(req.toAddress)),
           },
         },
       ],
-      nonce: req.nonce,
-      sender: AddressUtil.toHex(AddressUtil.parseToBytes(req.fromAddress)),
-      timeout_height: req.timeoutHeight || 0,
+      fee: { amount: BigInt(fee.amountAtto).toString(), gas_limit: fee.gasLimit, priority_fee: "0" },
+      memo: req.memo || "",
+      timeout_height: req.timeoutHeight ?? 0,
     };
 
     const jsonStr = JSON.stringify(canonicalObj);
@@ -108,6 +118,7 @@ export class TransactionBuilder {
     let signatureHex = "";
     let publicKeyHex = "";
 
+    if (algorithm !== KeyAlgorithm.Ed25519 && algorithm !== KeyAlgorithm.Secp256k1) throw new Error("Unsupported signing algorithm");
     if (algorithm === KeyAlgorithm.Ed25519) {
       const pubKey = ed25519.ed25519.getPublicKey(privateKey);
       const sig = ed25519.ed25519.sign(signBytes, privateKey);

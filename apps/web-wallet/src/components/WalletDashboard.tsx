@@ -24,6 +24,7 @@ export const WalletDashboard: React.FC<DashboardProps> = ({
   const [selectedCurrency, setSelectedCurrency] = useState<"usd" | "inr" | "eur" | "jpy">("usd");
   const [copied, setCopied] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [errorMessage, setErrorMessage] = useState("");
 
   const client = new SpraxClient(network);
 
@@ -32,6 +33,9 @@ export const WalletDashboard: React.FC<DashboardProps> = ({
     try {
       const bal = await client.getBalance(account.addressBech32);
       setBalance(bal);
+      setErrorMessage("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to read balance");
     } finally {
       setIsLoading(false);
     }
@@ -83,13 +87,13 @@ export const WalletDashboard: React.FC<DashboardProps> = ({
       <div style={{ background: "linear-gradient(135deg, #1f293d 0%, #111827 100%)", borderRadius: 14, padding: 20, textAlign: "center", marginBottom: 24, border: "1px solid #2d3748" }}>
         <span style={{ fontSize: 12, color: "#9ca3af", textTransform: "uppercase", letterSpacing: 1 }}>Total Balance</span>
         <h1 style={{ fontSize: 36, margin: "8px 0", fontWeight: "700" }}>
-          {balance.sprx} <span style={{ fontSize: 20, color: "#60a5fa" }}>SPRX</span>
+          {errorMessage ? "Unavailable" : balance.sprx} <span style={{ fontSize: 20, color: "#60a5fa" }}>SPRX</span>
         </h1>
         
         {/* Currency Switcher */}
         <div style={{ display: "flex", justifyContent: "center", alignItems: "center", gap: 8, marginTop: 12 }}>
           <span style={{ fontSize: 16, color: "#9ca3af" }}>
-            ≈ {currencySymbols[selectedCurrency]}{balance.fiatEstimates[selectedCurrency]}
+            Fiat estimate unavailable
           </span>
           <select
             value={selectedCurrency}
@@ -103,6 +107,8 @@ export const WalletDashboard: React.FC<DashboardProps> = ({
           </select>
         </div>
       </div>
+
+      {errorMessage && <p role="alert" style={{ color: "#f87171" }}>{errorMessage}</p>}
 
       {/* Action Buttons */}
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Account,
   AddressUtil,
@@ -27,12 +27,15 @@ export const SendModal: React.FC<SendModalProps> = ({
   const [memo, setMemo] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const active = useRef(true);
+  useEffect(() => { active.current = true; return () => { active.current = false; }; }, []);
 
   const client = new SpraxClient(network);
   const isValidRecipient = recipient.length > 0 && AddressUtil.isValidAddress(recipient);
 
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMessage("");
 
     if (!isValidRecipient) {
@@ -41,8 +44,7 @@ export const SendModal: React.FC<SendModalProps> = ({
     }
 
     try {
-      const parsedAmount = parseFloat(amount);
-      if (isNaN(parsedAmount) || parsedAmount <= 0) {
+      if (TransactionBuilder.sprxToAtto(amount) <= 0n) {
         setErrorMessage("Amount must be a positive decimal number.");
         return;
       }
@@ -51,6 +53,7 @@ export const SendModal: React.FC<SendModalProps> = ({
 
       // 1. Fetch current sequence nonce from node
       const nonce = await client.getAccountNonce(account.addressBech32);
+      if (!active.current) return;
 
       // 2. Sign transaction offline
       const signedTx = TransactionBuilder.sign(
@@ -68,8 +71,7 @@ export const SendModal: React.FC<SendModalProps> = ({
 
       // 3. Broadcast signed payload to network RPC
       const txHash = await client.broadcastTransaction(signedTx);
-      onSuccess(txHash);
-      onClose();
+      if (active.current) { onSuccess(txHash); onClose(); }
     } catch (err: any) {
       setErrorMessage(err.message || "Failed to broadcast transaction");
     } finally {
@@ -134,7 +136,7 @@ export const SendModal: React.FC<SendModalProps> = ({
           {/* Fee Notice */}
           <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9ca3af", marginBottom: 20, padding: "8px 12px", background: "#11141c", borderRadius: 8 }}>
             <span>Network Fee:</span>
-            <span style={{ color: "#fff", fontWeight: "bold" }}>0.0005 SPRX (≈ $0.002)</span>
+            <span style={{ color: "#fff", fontWeight: "bold" }}>0.0005 SPRX</span>
           </div>
 
           {/* Submit */}

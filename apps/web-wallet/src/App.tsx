@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   Account,
   EncryptedVault,
@@ -11,36 +11,92 @@ import { WalletDashboard } from "./components/WalletDashboard";
 import { WalletOnboarding } from "./components/WalletOnboarding";
 import { SendModal } from "./components/SendModal";
 import { ReceiveModal } from "./components/ReceiveModal";
+import { WalletUnlock } from "./components/WalletUnlock";
+import { loadVault, saveVault, VAULT_STORAGE_KEY } from "./vaultStorage";
 
 export const App: React.FC = () => {
   const [network, setNetwork] = useState<NetworkConfig>(NETWORKS.local);
   const [account, setAccount] = useState<Account | null>(null);
   const [privateKey, setPrivateKey] = useState<Uint8Array | null>(null);
-  const [vault, setVault] = useState<EncryptedVault | null>(null);
+  const [stored] = useState(() => {
+    try { return { vault: loadVault(localStorage), error: "" }; }
+    catch { return { vault: null, error: "The saved wallet could not be read. Keep your browser data and recover from your encrypted backup or recovery phrase." }; }
+  });
+  const [vault, setVault] = useState<EncryptedVault | null>(stored.vault);
+  const keyRef = useRef<Uint8Array | null>(null);
+  const session = useRef(0);
   const [isSendOpen, setIsSendOpen] = useState(false);
   const [isReceiveOpen, setIsReceiveOpen] = useState(false);
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
 
   const handleVaultCreated = async (mnemonic: string, password: string) => {
-    try {
-      const wallet = HDWallet.fromMnemonic(mnemonic);
-      const { account: derivedAccount, privateKey: derivedPrivKey } = wallet.deriveAccount(0);
-      const encryptedVault = await WalletVault.encrypt(mnemonic, password, 1);
-
-      setAccount(derivedAccount);
-      setPrivateKey(derivedPrivKey);
-      setVault(encryptedVault);
-      setStatusMessage("Wallet created and encrypted successfully!");
-      setTimeout(() => setStatusMessage(null), 4000);
-    } catch (err: any) {
-      alert(`Error initializing wallet: ${err.message}`);
-    }
+    const token = session.current;
+    const encryptedVault = await WalletVault.encrypt(mnemonic, password, 1);
+    if (token !== session.current) throw new Error("Wallet session changed. Please try again.");
+    saveVault(localStorage, encryptedVault);
+    setVault(encryptedVault);
+    unlockSeed(mnemonic);
+    setStatusMessage("Encrypted wallet saved in this browser.");
   };
 
-  const handleLockWallet = () => {
+  const unlockSeed = (mnemonic: string) => {
+    const wallet = HDWallet.fromMnemonic(mnemonic);
+    try {
+      const derived = wallet.deriveAccount(0);
+      keyRef.current?.fill(0);
+      keyRef.current = derived.privateKey;
+      setAccount(derived.account);
+      setPrivateKey(derived.privateKey);
+    } finally { wallet.destroy(); }
+  };
+
+  const handleUnlock = async (password: string) => {
+    if (!vault) throw new Error("No saved wallet");
+    const token = session.current;
+    const mnemonic = await WalletVault.decrypt(vault, password);
+    if (token !== session.current) throw new Error("Wallet session changed. Please try again.");
+    unlockSeed(mnemonic);
+  };
+
+  const handleLockWallet = useCallback(() => {
+    session.current++;
+    keyRef.current?.fill(0);
+    keyRef.current = null;
     setPrivateKey(null);
     setAccount(null);
-  };
+    setIsSendOpen(false);
+    setIsReceiveOpen(false);
+    setStatusMessage(null);
+  }, []);
+
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const reset = () => { clearTimeout(timer); timer = setTimeout(handleLockWallet, 5 * 60 * 1000); };
+    const hidden = () => { if (document.visibilityState === "hidden") handleLockWallet(); };
+    const storageChanged = (event: StorageEvent) => {
+      if (event.key === VAULT_STORAGE_KEY || event.key === null) {
+        handleLockWallet();
+        window.location.reload();
+      }
+    };
+    reset();
+    window.addEventListener("pointerdown", reset);
+    window.addEventListener("keydown", reset);
+    window.addEventListener("pagehide", handleLockWallet);
+    window.addEventListener("storage", storageChanged);
+    document.addEventListener("visibilitychange", hidden);
+    return () => {
+      clearTimeout(timer);
+      session.current++;
+      keyRef.current?.fill(0);
+      keyRef.current = null;
+      window.removeEventListener("pointerdown", reset);
+      window.removeEventListener("keydown", reset);
+      window.removeEventListener("pagehide", handleLockWallet);
+      window.removeEventListener("storage", storageChanged);
+      document.removeEventListener("visibilitychange", hidden);
+    };
+  }, [handleLockWallet]);
 
   return (
     <div style={{ minHeight: "100vh", backgroundColor: "#0b0e14", padding: "32px 16px" }}>
@@ -112,7 +168,9 @@ export const App: React.FC = () => {
       )}
 
       <main>
-        {!account ? (
+        {stored.error ? <p role="alert" style={{ color: "#f87171", maxWidth: 440, margin: "auto" }}>{stored.error}</p> : !account && vault ? (
+          <WalletUnlock onUnlock={handleUnlock} />
+        ) : !account ? (
           <WalletOnboarding onVaultCreated={handleVaultCreated} />
         ) : (
           <WalletDashboard

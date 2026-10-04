@@ -28,6 +28,15 @@ jobs:
           components: rustfmt, clippy
           targets: wasm32-unknown-unknown
       - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify browser SDK transaction fixtures
+        working-directory: packages/sprax-wallet-core
+        run: |
+          npm ci
+          npm run export:node-fixture
+          git diff --exit-code -- ../../contracts/fixtures/wallet-transactions.json
       - name: Verify formatting
         run: cargo fmt --all -- --check
       - name: Install pinned WASM optimizer
