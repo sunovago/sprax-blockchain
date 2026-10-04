@@ -754,6 +754,30 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_validator_key_configuration_fails_before_signing_or_listening() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut service = NodeService::new_or_load(temp.path().to_path_buf()).unwrap();
+        service.config.consensus.enabled = true;
+        service.config.consensus.local_validator_key_name = Some("missing".into());
+        assert!(service.start().await.is_err());
+        assert!(!service.is_running());
+        service
+            .keyring
+            .write()
+            .create_key("outsider", sprax_types::KeyType::Ed25519)
+            .unwrap();
+        service.config.consensus.local_validator_key_name = Some("outsider".into());
+        assert!(service
+            .start()
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("not an active validator"));
+        assert!(!service.is_running());
+        assert!(!temp.path().join("data/validator-signing.redb").exists());
+    }
+
+    #[tokio::test]
     async fn test_node_service_lifecycle() {
         let temp_dir = tempfile::tempdir().unwrap();
         let service = NodeService::new_or_load(temp_dir.path().to_path_buf()).unwrap();

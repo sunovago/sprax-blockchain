@@ -1,3 +1,9 @@
+# Historical deployment sketch, not a validated launch configuration.
+# Read docs/MAINNET_READINESS.md and docs/DISASTER_RECOVERY.md before use.
+# The current daemon reads <home>/config.toml and <home>/genesis.json.
+# Role/HSM/PERSISTENT_PEERS/P2P_LADDR/RPC_LADDR variables below are not daemon interfaces.
+# Supported entrypoint variables: SPRAX_HOME, SPRAX_ENV, SPRAX_GENESIS, SPRAX_CHAIN_ID,
+# SPRAX_P2P_PORT, SPRAX_RPC_PORT and SPRAX_PEERS. Keys and signing state need one fenced owner.
 version: '3.9'
 
 # SPRX Mainnet Production Deployment
