@@ -13,10 +13,13 @@ discard writes and nonce/balance changes. Queries use read-only storage and cons
 
 ```sh
 rustup target add wasm32-unknown-unknown
-cargo build --manifest-path contracts/examples/counter/Cargo.toml --target wasm32-unknown-unknown --release --locked
+bash scripts/build_wasm_fixture.sh
 export SPRX_TEST_CONTRACT_WASM="$PWD/contracts/examples/counter/target/wasm32-unknown-unknown/release/sprax_counter.wasm"
 cargo test -p sprax-core --test wasm_execution_tests --locked
 ```
+
+Install Binaryen 123 (providing `wasm-opt`) before running the build script. It lowers
+LLVM memory.copy/fill instructions to the pinned VM profile.
 
 The root Cargo WASM linker configuration retains undefined CosmWasm host imports.
 The VM supplies these imports when executing a module. The integration test executes

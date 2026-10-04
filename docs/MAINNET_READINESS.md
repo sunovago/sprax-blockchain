@@ -42,7 +42,7 @@ earlier passing results cover later changes.
 
 ```sh
 cargo fmt --all -- --check
-cargo build --manifest-path contracts/examples/counter/Cargo.toml --target wasm32-unknown-unknown --release --locked
+bash scripts/build_wasm_fixture.sh # requires Binaryen 123 wasm-opt
 export SPRX_TEST_CONTRACT_WASM="$PWD/contracts/examples/counter/target/wasm32-unknown-unknown/release/sprax_counter.wasm"
 cargo test --workspace --all-features --locked
 cargo clippy --workspace --all-targets --all-features -- -D warnings

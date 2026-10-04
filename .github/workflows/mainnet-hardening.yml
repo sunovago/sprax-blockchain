@@ -30,10 +30,34 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Verify formatting
         run: cargo fmt --all -- --check
+      - name: Install pinned WASM optimizer
+        run: |
+          curl --fail --location --retry 3 https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz --output "$RUNNER_TEMP/binaryen.tar.gz"
+          echo "e959f2170af4c20c552e9de3a0253704d6a9d2766e8fdb88e4d6ac4bae9388fe  $RUNNER_TEMP/binaryen.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_123/bin" >> "$GITHUB_PATH"
       - name: Run workspace regression and integration tests
         run: |
-          cargo build --manifest-path contracts/examples/counter/Cargo.toml --target wasm32-unknown-unknown --release --locked
+          bash scripts/build_wasm_fixture.sh
           export SPRX_TEST_CONTRACT_WASM="$GITHUB_WORKSPACE/contracts/examples/counter/target/wasm32-unknown-unknown/release/sprax_counter.wasm"
           cargo test --workspace --all-features --locked
       - name: Verify lint checks
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  frontend:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [apps/admin-panel, apps/explorer-ui, apps/web-wallet, packages/sprax-wallet-core]
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test --if-present
