@@ -72,3 +72,38 @@ fn validator_set_rejects_duplicates_and_unsafe_power() {
     )])
     .is_err());
 }
+
+#[test]
+fn equivocation_requires_valid_signatures_and_matching_metadata() {
+    let key = Ed25519Keypair::from_seed(&[9; 32]);
+    let mut vote_a = Vote::new(
+        VoteType::Precommit,
+        1,
+        0,
+        Some(Hash32::new([1; 32])),
+        key.address(),
+        vec![],
+    );
+    let mut vote_b = Vote::new(
+        VoteType::Precommit,
+        1,
+        0,
+        Some(Hash32::new([2; 32])),
+        key.address(),
+        vec![],
+    );
+    vote_a.signature = key.sign(&vote_a.sign_bytes().unwrap());
+    vote_b.signature = key.sign(&vote_b.sign_bytes().unwrap());
+    let mut evidence = sprax_consensus::EquivocationEvidence {
+        validator_address: key.address(),
+        height: 1,
+        round: 0,
+        vote_a,
+        vote_b,
+    };
+    evidence.verify_signatures(&key.public_key_bytes()).unwrap();
+    evidence.vote_a.signature[0] ^= 1;
+    assert!(evidence.verify_signatures(&key.public_key_bytes()).is_err());
+    evidence.validator_address = sprax_types::Address::ZERO;
+    assert!(!evidence.is_valid_equivocation());
+}

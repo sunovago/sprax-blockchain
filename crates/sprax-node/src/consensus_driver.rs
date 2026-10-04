@@ -500,6 +500,18 @@ pub async fn run_evidence_listener(
                 if !evidence.is_valid_equivocation() {
                     continue;
                 }
+                let valid_signatures = staking
+                    .read()
+                    .get_validator(&evidence.validator_address)
+                    .is_some_and(|validator| {
+                        evidence
+                            .verify_signatures(&validator.consensus_pubkey)
+                            .is_ok()
+                    });
+                if !valid_signatures {
+                    warn!("rejected forged equivocation evidence");
+                    continue;
+                }
                 match staking.write().slash_equivocation(&evidence) {
                     Ok(slashed) if !slashed.is_zero() => {
                         if let Err(e) = ledger

@@ -1,6 +1,8 @@
 use crate::error::StorageError;
 use sprax_types::Hash32;
 
+pub type KvPairs = Vec<(Vec<u8>, Vec<u8>)>;
+
 /// Read-only Key-Value store interface.
 pub trait ReadonlyKVStore {
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError>;
@@ -11,16 +13,12 @@ pub trait ReadonlyKVStore {
     /// Returns all key-value pairs with `start <= key < end` (or `key >= start` when `end` is
     /// `None`), sorted by key ascending. The one range primitive both backends implement
     /// natively; [`scan_prefix`](Self::scan_prefix) is defined in terms of it below.
-    fn scan_range(
-        &self,
-        start: &[u8],
-        end: Option<&[u8]>,
-    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError>;
+    fn scan_range(&self, start: &[u8], end: Option<&[u8]>) -> Result<KvPairs, StorageError>;
 
     /// Returns all key-value pairs whose key starts with `prefix`, sorted by key ascending.
     /// Backs range/iterator host functions (e.g. CosmWasm's `db_scan`/`db_next`) that need to
     /// walk a contract's own key space without seeing unrelated keys in the same flat store.
-    fn scan_prefix(&self, prefix: &[u8]) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+    fn scan_prefix(&self, prefix: &[u8]) -> Result<KvPairs, StorageError> {
         self.scan_range(prefix, prefix_upper_bound(prefix).as_deref())
     }
 }

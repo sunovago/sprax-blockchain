@@ -8,10 +8,12 @@ use parking_lot::RwLock;
 use sprax_types::Hash32;
 use std::{collections::BTreeMap, sync::Arc};
 
+type PendingWrites = BTreeMap<Vec<u8>, Option<Vec<u8>>>;
+
 #[derive(Debug, Clone)]
 pub struct OverlayStore<S> {
     base: S,
-    writes: Arc<RwLock<BTreeMap<Vec<u8>, Option<Vec<u8>>>>>,
+    writes: Arc<RwLock<PendingWrites>>,
     meta: Arc<RwLock<ChainWriteBatch>>,
 }
 
