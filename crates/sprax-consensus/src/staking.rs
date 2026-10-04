@@ -401,17 +401,31 @@ impl StakingKeeper {
             .collect();
 
         // Sort descending by token weight
-        active.sort_by_key(|b| std::cmp::Reverse(b.tokens));
+        active.sort_by(|a, b| {
+            b.tokens
+                .cmp(&a.tokens)
+                .then_with(|| a.operator_address.cmp(&b.operator_address))
+        });
         active.truncate(self.params.max_validators);
 
         let consensus_validators: Vec<Validator> = active
             .into_iter()
             .map(|v| {
                 // Voting power in millions of atto-SPRX units (or integer SPRX)
-                let voting_power = (v.tokens.as_atto() / 1_000_000_000_000_000_000).max(1) as u64;
-                Validator::new(v.operator_address, v.consensus_pubkey.clone(), voting_power)
+                let voting_power =
+                    u64::try_from((v.tokens.as_atto() / 1_000_000_000_000_000_000).max(1))
+                        .map_err(|_| {
+                            ConsensusError::InvalidValidatorSet(
+                                "validator voting power overflow".into(),
+                            )
+                        })?;
+                Ok(Validator::new(
+                    v.operator_address,
+                    v.consensus_pubkey.clone(),
+                    voting_power,
+                ))
             })
-            .collect();
+            .collect::<Result<_, ConsensusError>>()?;
 
         ValidatorSet::new(consensus_validators)
     }
