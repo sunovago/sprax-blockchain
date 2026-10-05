@@ -136,7 +136,7 @@ fn durable_signer_replays_identical_votes_and_refuses_conflicts_after_reopen() {
     let conflicting_hash = Hasher::block_hash(&conflicting_block.header).unwrap();
     assert!(journal
         .sign_with_block(
-            vote(&key, 7, 3, VoteType::Prevote, Some(conflicting_hash)),
+            vote(&key, 7, 3, VoteType::Precommit, Some(conflicting_hash)),
             &key,
             Some(conflicting_block),
         )
