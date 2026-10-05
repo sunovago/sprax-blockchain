@@ -479,7 +479,15 @@ mod tests {
             // Derived from the signer's own address so `validator_address` matches the signer.
             signer.address()
         };
-        let mut vote = Vote::new(vote_type, height, round, block_hash, address, vec![]);
+        let mut vote = Vote::new(
+            sprax_types::Hash32::ZERO,
+            vote_type,
+            height,
+            round,
+            block_hash,
+            address,
+            vec![],
+        );
         let sign_bytes = vote.sign_bytes().unwrap();
         vote.signature = signer.sign(&sign_bytes);
         vote

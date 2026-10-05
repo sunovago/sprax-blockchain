@@ -1,10 +1,14 @@
 use crate::{ConsensusError, ValidatorSet, Vote, VoteType};
 use sprax_crypto::{Ed25519Keypair, Hasher};
-use sprax_types::Block;
+use sprax_types::{Block, Hash32};
 use std::collections::HashSet;
 
 /// Verifies a unique, same-round, signed >2/3 certificate for this exact block.
-pub fn verify_block_commit(block: &Block, validators: &ValidatorSet) -> Result<(), ConsensusError> {
+pub fn verify_block_commit(
+    block: &Block,
+    validators: &ValidatorSet,
+    genesis: Hash32,
+) -> Result<(), ConsensusError> {
     // Bound certificate work before hashing or verifying any attacker-supplied signature.
     if block.last_commit.len() > validators.validators().len()
         || block
@@ -42,6 +46,7 @@ pub fn verify_block_commit(block: &Block, validators: &ValidatorSet) -> Result<(
             .find(|v| v.address == commit.validator_address)
             .ok_or_else(|| ConsensusError::InvalidVote("unknown commit signer".into()))?;
         let vote = Vote::new(
+            genesis,
             VoteType::Precommit,
             block.header.height,
             round,

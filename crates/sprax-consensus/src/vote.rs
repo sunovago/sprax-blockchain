@@ -12,6 +12,7 @@ pub enum VoteType {
 /// Signed validator vote message.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Vote {
+    pub genesis: Hash32,
     pub vote_type: VoteType,
     pub height: u64,
     pub round: u32,
@@ -22,6 +23,7 @@ pub struct Vote {
 
 impl Vote {
     pub fn new(
+        genesis: Hash32,
         vote_type: VoteType,
         height: u64,
         round: u32,
@@ -30,6 +32,7 @@ impl Vote {
         signature: Vec<u8>,
     ) -> Self {
         Self {
+            genesis,
             vote_type,
             height,
             round,
@@ -39,19 +42,23 @@ impl Vote {
         }
     }
 
-    /// Canonical signable byte representation: everything except `validator_address` (the
-    /// signer is recovered independently via validator-set lookup, never trusted from the
-    /// message itself) and `signature`. JSON-encoded, matching `TxBody::sign_bytes()`'s
-    /// convention elsewhere in the codebase.
+    /// Versioned, genesis-bound bytes including signer identity. Nil votes are bound
+    /// to the same network as block votes. Legacy unbound encodings are not accepted.
     pub fn sign_bytes(&self) -> Result<Vec<u8>, ConsensusError> {
         #[derive(Serialize)]
         struct SignableVote {
+            domain: &'static str,
+            genesis: Hash32,
+            validator_address: Address,
             vote_type: VoteType,
             height: u64,
             round: u32,
             block_hash: Option<Hash32>,
         }
         let signable = SignableVote {
+            domain: "sprax/vote/v2",
+            genesis: self.genesis,
+            validator_address: self.validator_address,
             vote_type: self.vote_type,
             height: self.height,
             round: self.round,

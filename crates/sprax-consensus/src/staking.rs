@@ -597,6 +597,7 @@ mod tests {
             height: 42,
             round: 0,
             vote_a: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 42,
                 0,
@@ -605,6 +606,7 @@ mod tests {
                 vec![1; 64],
             ),
             vote_b: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 42,
                 0,
@@ -656,6 +658,7 @@ mod tests {
             height: 10,
             round: 0,
             vote_a: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 10,
                 0,
@@ -664,6 +667,7 @@ mod tests {
                 vec![1; 64],
             ),
             vote_b: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 10,
                 0,

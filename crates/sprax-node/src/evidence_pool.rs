@@ -5,7 +5,7 @@ use sprax_types::Hash32;
 use std::collections::HashMap;
 
 /// Bounded, noncanonical observations. These proofs do not authorize an economic
-/// transition; finalized evidence processing and vote domain separation remain required.
+/// transition; finalized evidence processing remains required.
 #[derive(Debug, Default)]
 pub struct EvidencePool {
     observations: HashMap<Hash32, EquivocationEvidence>,
@@ -23,6 +23,10 @@ impl EvidencePool {
         mut evidence: EquivocationEvidence,
         genesis: &GenesisConfig,
     ) -> Result<bool, String> {
+        let expected = genesis.fingerprint().map_err(|e| e.to_string())?;
+        if evidence.vote_a.genesis != expected || evidence.vote_b.genesis != expected {
+            return Err("evidence genesis mismatch".into());
+        }
         if evidence.vote_a.signature.len() != 64 || evidence.vote_b.signature.len() != 64 {
             return Err("invalid evidence signature length".into());
         }
@@ -71,6 +75,7 @@ mod tests {
         });
         let signed = |value| {
             let mut v = Vote::new(
+                g.fingerprint().unwrap(),
                 VoteType::Precommit,
                 1,
                 round,
@@ -111,5 +116,20 @@ mod tests {
         let (g, e) = fixture(EvidencePool::CAPACITY as u32);
         assert!(pool.insert(e, &g).is_err());
         assert_eq!(pool.len(), EvidencePool::CAPACITY);
+    }
+
+    #[test]
+    fn evidence_from_another_genesis_or_mixed_domains_is_rejected() {
+        let (g, e) = fixture(0);
+        let mut pool = EvidencePool::default();
+        let mut other = g.clone();
+        other.chain_id = "sprax-other-network".into();
+        assert!(pool.insert(e.clone(), &other).is_err());
+        let mut mixed = e.clone();
+        mixed.vote_b.genesis = Hash32::ZERO;
+        assert!(!mixed.is_valid_equivocation());
+        assert!(pool.insert(mixed, &g).is_err());
+        assert!(pool.is_empty());
+        assert!(pool.insert(e, &g).unwrap());
     }
 }

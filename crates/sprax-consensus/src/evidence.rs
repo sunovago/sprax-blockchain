@@ -15,6 +15,7 @@ pub struct EquivocationEvidence {
 impl EquivocationEvidence {
     pub fn is_valid_equivocation(&self) -> bool {
         self.validator_address == self.vote_a.validator_address
+            && self.vote_a.genesis == self.vote_b.genesis
             && self.height == self.vote_a.height
             && self.round == self.vote_a.round
             && self.vote_a.validator_address == self.vote_b.validator_address
@@ -50,6 +51,7 @@ mod tests {
     fn test_equivocation_validation() {
         let addr = Address::new([5u8; 20]);
         let vote1 = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             100,
             0,
@@ -58,6 +60,7 @@ mod tests {
             vec![1; 64],
         );
         let vote2 = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             100,
             0,

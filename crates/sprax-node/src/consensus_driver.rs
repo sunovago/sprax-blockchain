@@ -376,6 +376,11 @@ impl ConsensusDriver {
     }
 
     async fn handle_inbound_vote(&mut self, vote: Vote) -> bool {
+        if self.ledger.read().genesis().fingerprint().ok() != Some(vote.genesis)
+            || vote.signature.len() != 64
+        {
+            return false;
+        }
         let validator = match self
             .engine
             .validator_set()
@@ -521,7 +526,12 @@ impl ConsensusDriver {
             return;
         }
         block.last_commit = commit_sigs;
-        if let Err(e) = sprax_consensus::verify_block_commit(&block, self.engine.validator_set()) {
+        let Ok(genesis) = self.ledger.read().genesis().fingerprint() else {
+            return;
+        };
+        if let Err(e) =
+            sprax_consensus::verify_block_commit(&block, self.engine.validator_set(), genesis)
+        {
             warn!(height, "invalid finalization certificate: {e}");
             return;
         }
@@ -574,7 +584,14 @@ impl ConsensusDriver {
         round: u32,
         block_hash: Option<Hash32>,
     ) -> Result<Vote, ConsensusError> {
+        let genesis = self
+            .ledger
+            .read()
+            .genesis()
+            .fingerprint()
+            .map_err(|e| ConsensusError::InvalidVote(e.to_string()))?;
         let vote = Vote::new(
+            genesis,
             vote_type,
             height,
             round,

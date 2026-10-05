@@ -40,9 +40,25 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
     let mut wrong_genesis = proposal;
     wrong_genesis.genesis = Hash32::ZERO;
     assert!(reopened.sign_proposal(wrong_genesis, &signer).is_err());
-    let old_vote = Vote::new(VoteType::Prevote, 1, 1, None, signer.address(), Vec::new());
+    let old_vote = Vote::new(
+        genesis,
+        VoteType::Prevote,
+        1,
+        1,
+        None,
+        signer.address(),
+        Vec::new(),
+    );
     assert!(reopened.sign(old_vote, &signer).is_err());
-    let current_vote = Vote::new(VoteType::Prevote, 1, 2, None, signer.address(), Vec::new());
+    let current_vote = Vote::new(
+        genesis,
+        VoteType::Prevote,
+        1,
+        2,
+        None,
+        signer.address(),
+        Vec::new(),
+    );
     reopened.sign(current_vote, &signer).unwrap();
 }
 use sprax_crypto::Ed25519Keypair;
@@ -56,7 +72,15 @@ fn vote(
     kind: VoteType,
     hash: Option<Hash32>,
 ) -> Vote {
-    Vote::new(kind, height, round, hash, key.address(), vec![])
+    Vote::new(
+        Hash32::new([11; 32]),
+        kind,
+        height,
+        round,
+        hash,
+        key.address(),
+        vec![],
+    )
 }
 
 #[test]
@@ -117,8 +141,12 @@ fn durable_signer_replays_identical_votes_and_refuses_conflicts_after_reopen() {
 fn competing_signers_cannot_release_two_conflicting_votes() {
     let directory = tempfile::tempdir().unwrap();
     let key = Ed25519Keypair::generate();
-    let journal =
-        SigningJournal::open(&directory.path().join("signer.redb"), Hash32::ZERO, &key).unwrap();
+    let journal = SigningJournal::open(
+        &directory.path().join("signer.redb"),
+        Hash32::new([11; 32]),
+        &key,
+    )
+    .unwrap();
     let results = std::thread::scope(|scope| {
         let a = scope.spawn(|| {
             journal.sign(
@@ -135,4 +163,62 @@ fn competing_signers_cannot_release_two_conflicting_votes() {
         [a.join().unwrap(), b.join().unwrap()]
     });
     assert_eq!(results.iter().filter(|result| result.is_ok()).count(), 1);
+}
+
+#[test]
+fn wrong_genesis_votes_do_not_advance_durable_signing_state() {
+    let directory = tempfile::tempdir().unwrap();
+    let key = Ed25519Keypair::generate();
+    let identity = Hash32::new([11; 32]);
+    let journal =
+        SigningJournal::open(&directory.path().join("signer.redb"), identity, &key).unwrap();
+    let mut wrong = vote(&key, 10, 0, VoteType::Prevote, None);
+    wrong.genesis = Hash32::new([99; 32]);
+    assert!(journal.sign(wrong, &key).is_err());
+    assert!(journal.state().unwrap().is_none());
+    journal
+        .sign(vote(&key, 1, 0, VoteType::Prevote, None), &key)
+        .unwrap();
+    assert_eq!(journal.state().unwrap().unwrap().vote.genesis, identity);
+}
+
+#[test]
+fn legacy_signing_identity_is_rejected_without_resetting_history() {
+    use redb::{Database, TableDefinition};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("legacy.redb");
+    let key = Ed25519Keypair::generate();
+    let genesis = Hash32::new([11; 32]);
+    let encoded = serde_json::to_vec(&serde_json::json!({
+        "genesis": genesis,
+        "public_key": key.public_key_bytes().to_vec(),
+    }))
+    .unwrap();
+    {
+        let db = Database::create(&path).unwrap();
+        let write = db.begin_write().unwrap();
+        {
+            let mut table = write
+                .open_table(TableDefinition::<&str, &[u8]>::new("signing"))
+                .unwrap();
+            table.insert("identity", encoded.as_slice()).unwrap();
+            table
+                .insert("state", b"legacy history must remain intact".as_slice())
+                .unwrap();
+        }
+        write.commit().unwrap();
+    }
+    let marker = path.with_extension("initialized");
+    std::fs::write(&marker, &encoded).unwrap();
+    assert!(SigningJournal::open(&path, genesis, &key).is_err());
+    assert_eq!(std::fs::read(marker).unwrap(), encoded);
+    let db = Database::open(&path).unwrap();
+    let read = db.begin_read().unwrap();
+    let table = read
+        .open_table(TableDefinition::<&str, &[u8]>::new("signing"))
+        .unwrap();
+    assert_eq!(
+        table.get("state").unwrap().unwrap().value(),
+        b"legacy history must remain intact"
+    );
 }

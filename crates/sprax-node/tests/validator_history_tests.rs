@@ -6,12 +6,13 @@ use sprax_types::{
     Amount, Block, ChainId, CommitSignature, KeyType, Transaction, TxBody, TxFee, TxMessage,
 };
 
-fn certify(block: &mut Block, keys: &[&Ed25519Keypair]) {
+fn certify(block: &mut Block, keys: &[&Ed25519Keypair], genesis: sprax_types::Hash32) {
     let hash = Hasher::block_hash(&block.header).unwrap();
     block.last_commit = keys
         .iter()
         .map(|key| {
             let vote = Vote::new(
+                genesis,
                 VoteType::Precommit,
                 block.header.height,
                 0,
@@ -62,6 +63,7 @@ fn historical_catchup_uses_each_committed_stake_transition_and_ignores_local_cac
     )
     .unwrap();
     let node = NodeService::new_or_load(dir.path().to_path_buf()).unwrap();
+    let identity = genesis.fingerprint().unwrap();
     let mut producer = ChainLedger::init_from_genesis(genesis).unwrap();
     let old = ValidatorSet::from_canonical(producer.active_validators().unwrap()).unwrap();
     let body = TxBody {
@@ -89,7 +91,7 @@ fn historical_catchup_uses_each_committed_stake_transition_and_ignores_local_cac
         )
         .unwrap();
     let mut first = producer.mine_block(alice.address()).unwrap();
-    certify(&mut first, &[&alice, &bob]);
+    certify(&mut first, &[&alice, &bob], identity);
     node.apply_block(first.clone()).unwrap();
     assert!(node.apply_block(first.clone()).unwrap().is_empty());
     let mut conflict = first;
@@ -100,8 +102,8 @@ fn historical_catchup_uses_each_committed_stake_transition_and_ignores_local_cac
         .write()
         .sync_validator_tokens(&alice.address(), Amount::from_sprx_whole(1).unwrap());
     let mut second = producer.mine_block(alice.address()).unwrap();
-    certify(&mut second, &[&alice]);
-    assert!(sprax_consensus::verify_block_commit(&second, &old).is_err());
+    certify(&mut second, &[&alice], identity);
+    assert!(sprax_consensus::verify_block_commit(&second, &old, identity).is_err());
     node.apply_block(second).unwrap();
     assert_eq!(node.height(), 2);
     assert_eq!(

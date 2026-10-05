@@ -129,6 +129,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
 
     for i in 0..4 {
         let pv = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             1,
             0,
@@ -142,6 +143,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
 
     for i in 0..4 {
         let pc = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             1,
             0,
@@ -164,6 +166,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
 
     for i in 0..3 {
         let pv = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             2,
             0,
@@ -177,6 +180,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
 
     for i in 0..3 {
         let pc = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             2,
             0,

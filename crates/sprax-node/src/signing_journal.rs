@@ -10,6 +10,7 @@ const TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("signing");
 
 #[derive(Debug, Serialize, Deserialize)]
 struct Identity {
+    vote_signing_version: u32,
     genesis: Hash32,
     public_key: Vec<u8>,
 }
@@ -41,6 +42,7 @@ impl SigningJournal {
         }
         let db = Database::create(path).map_err(|e| e.to_string())?;
         let identity = Identity {
+            vote_signing_version: 2,
             genesis,
             public_key: signer.public_key_bytes().to_vec(),
         };
@@ -179,7 +181,8 @@ impl SigningJournal {
     /// Database write transactions serialize competing callers; a signature is returned
     /// only after its record is durable. Identical retries return the persisted signature.
     pub fn sign(&self, mut vote: Vote, signer: &Ed25519Keypair) -> Result<Vote, String> {
-        if signer.public_key_bytes().as_slice() != self.public_key.as_slice()
+        if vote.genesis != self.genesis
+            || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
             || vote.validator_address != signer.address()
         {
             return Err("signer does not match journal identity".into());

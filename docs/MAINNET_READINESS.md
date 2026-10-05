@@ -19,6 +19,11 @@ Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 
   arrival never changes stake, jail status, state root or consensus power. The unsafe direct
   ledger slash API was removed. Finalized, chain-bound economic evidence processing remains
   unfinished; the observation pool is not persistent and does not implement slashing.
+- Vote signatures use the `sprax/vote/v2` domain and include the exact genesis fingerprint,
+  validator address, step, height, round and optional block hash. Nil votes, certificates and
+  equivocation observations cannot be reused on another genesis. Old wire votes without
+  genesis are rejected; signing journal identities include signing version 2 and reject
+  legacy identities without resetting existing history. This is a coordinated protocol change.
 - The consensus driver waits for precommit quorum before applying a proposal.
 - Block commit certificates carry the consensus round and are checked for valid signatures,
   unique known signers, a consistent round, and more than two-thirds voting power.
@@ -164,6 +169,11 @@ verify the chain changes above or a live deployment.
 Passing local tests or producing configuration files alone does not close these gates.
 
 ## Upgrade compatibility
+
+Vote signing version 2 replaces the old unbound encoding. Mixed-version consensus, old
+commit certificates and legacy signing journals are incompatible. Never delete or reset an
+existing signing journal to bypass this rejection. A fresh coordinated network with new
+operator keys or a separately reviewed migration is required; automatic migration is absent.
 
 The canonical validator commitment encoding replaces the historical genesis-validator JSON
 hash and the copied-parent header placeholder. Restart rejects an old genesis commitment,

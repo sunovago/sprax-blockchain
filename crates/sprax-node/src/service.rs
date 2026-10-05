@@ -432,7 +432,11 @@ impl NodeService {
                     .map_err(|e| NodeError::RuntimeError(e.to_string()))?,
             )
             .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
-            sprax_consensus::verify_block_commit(&block, &validators)
+            let genesis = guard
+                .genesis()
+                .fingerprint()
+                .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
+            sprax_consensus::verify_block_commit(&block, &validators, genesis)
                 .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
         }
         let receipts = guard
@@ -620,7 +624,7 @@ impl NodeService {
                                 .map_err(|e| e.to_string())
                                 .and_then(|v| sprax_consensus::ValidatorSet::from_canonical(v).map_err(|e| e.to_string()));
                             match validators {
-                                Ok(validators) if sprax_consensus::verify_block_commit(&block, &validators).is_ok() => {}
+                                Ok(validators) if guard.genesis().fingerprint().is_ok_and(|genesis| sprax_consensus::verify_block_commit(&block, &validators, genesis).is_ok()) => {}
                                 _ => { warn!("rejected block gossip without a valid quorum certificate"); continue; }
                             }
                         }

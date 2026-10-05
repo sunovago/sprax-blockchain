@@ -13,7 +13,15 @@ fn engine() -> BftConsensusEngine {
     )
 }
 fn vote(kind: VoteType, round: u32, hash: Option<Hash32>, validator: u8) -> Vote {
-    Vote::new(kind, 1, round, hash, Address::new([validator; 20]), vec![])
+    Vote::new(
+        sprax_types::Hash32::ZERO,
+        kind,
+        1,
+        round,
+        hash,
+        Address::new([validator; 20]),
+        vec![],
+    )
 }
 #[test]
 fn quorum_for_unknown_data_does_not_create_a_lock() {

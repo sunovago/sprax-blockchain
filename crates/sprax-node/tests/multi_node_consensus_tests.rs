@@ -287,8 +287,14 @@ async fn test_equivocation_gossip_does_not_change_unfinalized_state() {
     }
     assert_eq!(attacker.connected_peers_count(), 2);
 
-    let sign_and_broadcast = |hash_byte: u8| {
+    let genesis =
+        sprax_core::GenesisConfig::load_from_file(&temp_dirs[0].path().join("genesis.json"))
+            .unwrap()
+            .fingerprint()
+            .unwrap();
+    let sign_and_broadcast = |identity: Hash32, hash_byte: u8| {
         let mut vote = Vote::new(
+            identity,
             VoteType::Precommit,
             1,
             0,
@@ -300,8 +306,14 @@ async fn test_equivocation_gossip_does_not_change_unfinalized_state() {
         vote.signature = charlie_kp.sign(&sign_bytes);
         attacker.broadcast_vote(vote);
     };
-    sign_and_broadcast(0xAA);
-    sign_and_broadcast(0xBB);
+    sign_and_broadcast(Hash32::ZERO, 0xAA);
+    sign_and_broadcast(Hash32::ZERO, 0xBB);
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    for service in &services {
+        assert_eq!(service.observed_evidence_count(), 0);
+    }
+    sign_and_broadcast(genesis, 0xAA);
+    sign_and_broadcast(genesis, 0xBB);
 
     let original_charlie_tokens = Amount::from_sprx_whole(25_000).unwrap();
     let roots: Vec<_> = services
@@ -317,7 +329,7 @@ async fn test_equivocation_gossip_does_not_change_unfinalized_state() {
         tokio::time::sleep(Duration::from_millis(50)).await;
     }
     // Repeat evidence cannot become an extra observation or an out-of-block slash.
-    sign_and_broadcast(0xBB);
+    sign_and_broadcast(genesis, 0xBB);
     tokio::time::sleep(Duration::from_millis(100)).await;
     for (index, service) in services.iter().enumerate() {
         assert_eq!(service.observed_evidence_count(), 1);
