@@ -163,7 +163,12 @@ impl NodeService {
 
         // staking.json is an operational cache, never an input to consensus power.
         // Preserve legacy files, but rebuild the display cache from committed ledger state.
-        let mut staking = StakingKeeper::default();
+        let mut staking = StakingKeeper::new(sprax_consensus::StakingParams {
+            // Genesis admission was validated by the ledger; display-cache defaults must
+            // not reject an otherwise valid agreed genesis.
+            min_self_stake: Amount::ZERO,
+            ..Default::default()
+        });
         for v in &genesis.validators {
             staking
                 .register_validator(

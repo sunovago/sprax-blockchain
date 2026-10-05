@@ -159,7 +159,8 @@ Passing local tests or producing configuration files alone does not close these 
 ## Upgrade compatibility
 
 The canonical validator commitment encoding replaces the historical genesis-validator JSON
-hash and the copied-parent header placeholder. Existing block histories require an explicit,
+hash and the copied-parent header placeholder. Restart rejects an old genesis commitment,
+invalid persisted ancestry, and state that differs from the finalized tip. Existing block histories require an explicit,
 reviewed migration; do not mix binaries with the two commitment encodings.
 
 These protocol changes require a coordinated new testnet/genesis or a separately reviewed

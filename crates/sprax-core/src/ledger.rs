@@ -113,7 +113,9 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
                 "configured genesis does not match persisted chain identity".into(),
             ));
         }
-        let mut blocks = Vec::with_capacity(height as usize + 1);
+        let expected_genesis = genesis.initialize_state(&sprax_storage::MemKVStore::new())?;
+        // Do not allocate from untrusted/corrupted height metadata before reading blocks.
+        let mut blocks: Vec<Block> = Vec::new();
         let mut block_by_hash = HashMap::new();
         let mut tx_index = HashMap::new();
 
@@ -126,6 +128,30 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
                 })?;
             let block: Block = serde_json::from_slice(&block_bytes)
                 .map_err(|e| CoreError::StateError(format!("block decode error: {e}")))?;
+            if block.header.height != h || block.header.chain_id != genesis.chain_id {
+                return Err(CoreError::StateError(
+                    "persisted block height or chain identity mismatch".into(),
+                ));
+            }
+            if h == 0 {
+                if block.header != expected_genesis
+                    || !block.body.transactions.is_empty()
+                    || !block.last_commit.is_empty()
+                {
+                    return Err(CoreError::StateError("persisted genesis/header commitment differs from this protocol; explicit migration required".into()));
+                }
+            } else if let Some(previous) = blocks.last() {
+                if block.header.parent_hash
+                    != Hasher::block_hash(&previous.header)
+                        .map_err(|e| CoreError::StateError(e.to_string()))?
+                    || block.header.version != 1
+                    || block.header.timestamp_unix_secs <= previous.header.timestamp_unix_secs
+                {
+                    return Err(CoreError::StateError(
+                        "persisted block ancestry or timestamp is invalid".into(),
+                    ));
+                }
+            }
             let block_hash = Hasher::block_hash(&block.header)
                 .map_err(|e| CoreError::StateError(e.to_string()))?;
             block_by_hash.insert(block_hash, h);
@@ -146,6 +172,15 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
             }
 
             blocks.push(block);
+        }
+
+        if blocks
+            .last()
+            .is_none_or(|block| store.compute_root().ok() != Some(block.header.state_root))
+        {
+            return Err(CoreError::StateError(
+                "persisted state root does not match finalized tip".into(),
+            ));
         }
 
         Ok(Self {

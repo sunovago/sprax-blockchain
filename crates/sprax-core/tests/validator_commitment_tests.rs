@@ -80,3 +80,28 @@ fn proposals_commit_preexecution_power_and_reject_wrong_commitments_atomically()
     replica.apply_block(next).unwrap();
     assert_eq!(source.state_root().unwrap(), replica.state_root().unwrap());
 }
+
+#[test]
+fn restart_rejects_legacy_genesis_commitments_and_unfinalized_state_mutations() {
+    use sprax_storage::{ChainMetaStore, KVStore, MemKVStore};
+    let (g, alice, _) = genesis();
+    let store = MemKVStore::new();
+    let mut ledger = ChainLedger::open_or_init(store.clone(), || Ok(g.clone())).unwrap();
+    let mut old = ledger.get_block_by_height(0).unwrap().clone();
+    old.header.validator_set_hash =
+        sprax_crypto::Hasher::sha256(&serde_json::to_vec(&g.validators).unwrap());
+    store
+        .put_block(0, &serde_json::to_vec(&old).unwrap())
+        .unwrap();
+    assert!(ChainLedger::open_or_init(store.clone(), || Ok(g.clone())).is_err());
+    let original = ledger.get_block_by_height(0).unwrap();
+    store
+        .put_block(0, &serde_json::to_vec(original).unwrap())
+        .unwrap();
+    ledger.mine_block(alice.address()).unwrap();
+    drop(ledger);
+    store
+        .set(b"unfinalized/tamper", b"state changed outside a block")
+        .unwrap();
+    assert!(ChainLedger::open_or_init(store, || Ok(g)).is_err());
+}
