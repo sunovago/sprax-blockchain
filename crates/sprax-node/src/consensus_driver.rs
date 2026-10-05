@@ -70,6 +70,15 @@ impl ConsensusDriver {
                 }
             }
         }
+        if let Some(proposal) = signing_journal
+            .latest_proposal()
+            .map_err(ConsensusError::InvalidVote)?
+        {
+            if proposal.block.header.height == engine.current_height() {
+                last_attempted_height = proposal.block.header.height;
+                current_round = current_round.max(proposal.round);
+            }
+        }
         Ok(Self {
             engine,
             staking,
@@ -176,6 +185,11 @@ impl ConsensusDriver {
         };
 
         let Some(block_hash) = block_hash else {
+            self.cast_nil_prevote(next_height, round).await;
+            if self.maybe_cast_reactive_precommit(next_height, round).await {
+                return;
+            }
+            self.process_votes_until_finalized(next_height, round).await;
             return;
         };
 
@@ -275,7 +289,6 @@ impl ConsensusDriver {
 
         let Some(block) = received else {
             warn!(height, round, "propose timeout / no proposal received");
-            self.cast_nil_prevote(height, round).await;
             return None;
         };
 
@@ -284,7 +297,6 @@ impl ConsensusDriver {
                 height,
                 round, "received proposal from unexpected proposer, ignoring"
             );
-            self.cast_nil_prevote(height, round).await;
             return None;
         }
 
@@ -305,7 +317,6 @@ impl ConsensusDriver {
             },
             Err(e) => {
                 warn!(height, round, "rejected invalid proposal: {e}");
-                self.cast_nil_prevote(height, round).await;
                 None
             }
         }
@@ -318,13 +329,12 @@ impl ConsensusDriver {
     }
 
     async fn process_votes_until_finalized(&mut self, height: u64, round: u32) {
-        let deadline = Instant::now()
-            + Duration::from_millis(
-                self.timeouts.timeout_prevote_ms
-                    + self.timeouts.timeout_precommit_ms
-                    + self.timeouts.timeout_commit_ms
-                    + 2_000,
-            );
+        let start = Instant::now();
+        let prevote_deadline = start + Duration::from_millis(self.timeouts.timeout_prevote_ms);
+        let deadline = prevote_deadline
+            + Duration::from_millis(self.timeouts.timeout_precommit_ms)
+            + Duration::from_millis(self.timeouts.timeout_commit_ms)
+            + Duration::from_millis(2_000);
         loop {
             let now = Instant::now();
             if now >= deadline {
@@ -334,7 +344,22 @@ impl ConsensusDriver {
                 );
                 return;
             }
-            match tokio::time::timeout(deadline - now, self.inbound_vote_rx.recv()).await {
+            if now >= prevote_deadline && !self.precommitted_this_round {
+                if self.cast_nil_precommit(height, round).await {
+                    return;
+                }
+            }
+            let wake = if !self.precommitted_this_round && Instant::now() < prevote_deadline {
+                prevote_deadline.min(deadline)
+            } else {
+                deadline
+            };
+            match tokio::time::timeout(
+                wake.saturating_duration_since(Instant::now()),
+                self.inbound_vote_rx.recv(),
+            )
+            .await
+            {
                 Ok(Some(vote)) => {
                     if vote.height != height || vote.round != round {
                         continue;
@@ -343,7 +368,8 @@ impl ConsensusDriver {
                         return;
                     }
                 }
-                _ => return,
+                Err(_) => continue,
+                Ok(None) => return,
             }
         }
     }
@@ -404,7 +430,9 @@ impl ConsensusDriver {
                         self.finalize_height(height, commit_sigs);
                         true
                     }
-                    _ => false,
+                    _ => self
+                        .engine
+                        .has_nil_precommit_quorum(height, self.current_round),
                 }
             }
         }
@@ -414,12 +442,42 @@ impl ConsensusDriver {
         if self.precommitted_this_round {
             return false;
         }
-        let Some(bh) = self.engine.get_prevoted_block_with_quorum(height, round) else {
+        if !self.engine.has_prevote_quorum(height, round) {
             return false;
-        };
-        let vote = match self.build_signed_vote(VoteType::Precommit, height, round, Some(bh)) {
+        }
+        let hash = self.engine.get_prevoted_block_with_quorum(height, round);
+        let validated = hash
+            .filter(|hash| {
+                self.pending_block.as_ref().is_some_and(|block| {
+                    block.header.height == height
+                        && Hasher::block_hash(&block.header).ok() == Some(*hash)
+                })
+            })
+            .filter(|hash| {
+                self.engine
+                    .locked_block()
+                    .is_none_or(|locked| locked == *hash)
+            });
+        let vote = match self.build_signed_vote(VoteType::Precommit, height, round, validated) {
             Ok(v) => v,
             Err(_) => return false,
+        };
+        if let Some(hash) = validated {
+            if let Err(error) = self.engine.record_precommit_lock(height, round, hash) {
+                warn!(height, round, "cannot record precommit lock: {error}");
+                return false;
+            }
+        }
+        self.precommitted_this_round = true;
+        self.broadcast_and_feed_vote(vote).await
+    }
+
+    async fn cast_nil_precommit(&mut self, height: u64, round: u32) -> bool {
+        if self.precommitted_this_round {
+            return false;
+        }
+        let Ok(vote) = self.build_signed_vote(VoteType::Precommit, height, round, None) else {
+            return false;
         };
         self.precommitted_this_round = true;
         self.broadcast_and_feed_vote(vote).await
@@ -439,7 +497,9 @@ impl ConsensusDriver {
                     self.finalize_height(height, commit_sigs);
                     true
                 }
-                _ => false,
+                _ => self
+                    .engine
+                    .has_nil_precommit_quorum(height, self.current_round),
             },
         }
     }
@@ -551,5 +611,90 @@ pub async fn run_evidence_listener(
             Ok(false) => {}
             Err(e) => warn!("rejected equivocation observation: {e}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use sprax_core::{GenesisAccount, GenesisConfig, GenesisValidator};
+    use sprax_types::Amount;
+
+    #[tokio::test]
+    async fn restart_after_proposal_only_advances_past_the_durable_round() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = Ed25519Keypair::from_seed(&[42; 32]);
+        let mut genesis = GenesisConfig::default_development();
+        genesis.accounts = vec![GenesisAccount {
+            name: "test".into(),
+            address: key.address(),
+            initial_balance: Amount::from_sprx_whole(1000).unwrap(),
+        }];
+        genesis.validators = vec![GenesisValidator {
+            operator_address: key.address(),
+            consensus_pubkey: key.public_key_bytes().to_vec(),
+            self_stake: Amount::from_sprx_whole(100).unwrap(),
+            moniker: "test".into(),
+        }];
+        let identity = genesis.fingerprint().unwrap();
+        let store = RedbStore::open(&dir.path().join("state.redb")).unwrap();
+        let ledger = ChainLedger::open_or_init(store, || Ok(genesis)).unwrap();
+        let validators =
+            sprax_consensus::ValidatorSet::from_canonical(ledger.active_validators().unwrap())
+                .unwrap();
+        let path = dir.path().join("signing.redb");
+        let journal = SigningJournal::open(&path, identity, &key).unwrap();
+        journal
+            .sign_proposal(
+                SignedProposal {
+                    genesis: identity,
+                    round: 7,
+                    block: ledger.build_proposal(key.address()).unwrap(),
+                    signature: vec![],
+                },
+                &key,
+            )
+            .unwrap();
+        assert!(journal.state().unwrap().is_none());
+        drop(journal);
+        let journal = SigningJournal::open(&path, identity, &key).unwrap();
+        let (tx, _) = mpsc::channel(8);
+        let (blocks, _) = mpsc::channel(8);
+        let (votes, vote_rx) = mpsc::channel(8);
+        let (proposals, proposal_rx) = mpsc::channel(8);
+        let (evidence, _) = mpsc::channel(8);
+        let p2p = P2pService::new(
+            sprax_network::PeerId::new("restart-test").unwrap(),
+            "sprax-devnet-1".into(),
+            sprax_network::NetworkConfig::default(),
+            tx,
+            blocks,
+            votes,
+            proposals,
+            evidence,
+            Arc::new(|_, _| Vec::new()),
+        );
+        let ledger = Arc::new(RwLock::new(ledger));
+        let mut driver = ConsensusDriver::new(
+            BftConsensusEngine::new(1, validators),
+            Arc::new(RwLock::new(StakingKeeper::default())),
+            ledger.clone(),
+            p2p,
+            key,
+            Arc::new(RwLock::new(crate::evidence_pool::EvidencePool::default())),
+            journal,
+            ConsensusTimeoutConfig::default(),
+            vote_rx,
+            proposal_rx,
+            Arc::new(AtomicBool::new(true)),
+            0,
+        )
+        .unwrap();
+        driver.run_one_height().await;
+        assert_eq!(ledger.read().height(), 1);
+        assert_eq!(
+            driver.signing_journal.state().unwrap().unwrap().vote.round,
+            8
+        );
     }
 }

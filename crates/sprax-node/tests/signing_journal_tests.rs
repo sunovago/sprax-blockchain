@@ -35,6 +35,7 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
     assert!(reopened.sign_proposal(conflict, &signer).is_err());
     let mut old = proposal.clone();
     old.round = 1;
+    assert_eq!(reopened.latest_proposal().unwrap().unwrap().round, 2);
     assert!(reopened.sign_proposal(old, &signer).is_err());
     let mut wrong_genesis = proposal;
     wrong_genesis.genesis = Hash32::ZERO;

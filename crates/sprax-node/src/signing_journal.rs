@@ -101,6 +101,17 @@ impl SigningJournal {
     }
 
     /// Proposal signatures have a separate durable sequence from prevotes/precommits.
+    pub fn latest_proposal(&self) -> Result<Option<SignedProposal>, String> {
+        let read = self.db.begin_read().map_err(|e| e.to_string())?;
+        let table = read.open_table(TABLE).map_err(|e| e.to_string())?;
+        let result = table
+            .get("proposal")
+            .map_err(|e| e.to_string())?
+            .map(|v| serde_json::from_slice(v.value()).map_err(|e| e.to_string()))
+            .transpose();
+        result
+    }
+
     pub fn sign_proposal(
         &self,
         mut proposal: SignedProposal,

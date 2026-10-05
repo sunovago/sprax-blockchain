@@ -24,6 +24,11 @@ Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 
   unique known signers, a consistent round, and more than two-thirds voting power.
 - Non-development nodes and consensus-enabled nodes reject uncertified block gossip.
   Development nodes with consensus disabled retain explicit local/manual mining support.
+- Proposal timeouts continue collecting votes, emit nil precommits after prevote timeout,
+  and finish a nil-quorum round without finalizing a block. A quorum for unknown proposal
+  data cannot establish a signing lock; a lock is recorded after validated, durable precommit.
+  Round numbers cannot regress and retained vote history is bounded to current/locked/valid
+  rounds. Restarts account for proposal-only signing history, not only the last signed vote.
 - Consensus locks survive retries at the same height; conflicting proposals receive nil
   prevotes. Full round synchronization and unlocking/liveness still need work.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing

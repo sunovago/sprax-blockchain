@@ -138,8 +138,19 @@ impl BftConsensusEngine {
     /// exactly what equivocation detection is designed to catch, so honest retries would be
     /// indistinguishable from real double-signing to any observer.
     pub fn set_round(&mut self, round: u32) {
+        if round < self.state.round {
+            return;
+        }
         self.state.round = round;
         self.state.step = RoundStep::Propose;
+        let height = self.state.height;
+        let locked = self.state.locked_round;
+        let valid = self.state.valid_round;
+        let retained =
+            |h: u64, r: u32| h == height && (r == round || Some(r) == locked || Some(r) == valid);
+        self.prevotes.retain(|(h, r, _), _| retained(*h, *r));
+        self.precommits.retain(|(h, r, _), _| retained(*h, *r));
+        self.proposed_blocks.retain(|(h, r), _| retained(*h, *r));
     }
 
     /// Selects the deterministic proposer for the current round using DWRR.
@@ -207,14 +218,61 @@ impl BftConsensusEngine {
             if let Some(bh) =
                 self.get_prevoted_block_with_quorum(self.state.height, self.state.round)
             {
-                self.state.locked_round = Some(self.state.round);
-                self.state.locked_block = Some(bh);
-                self.state.valid_round = Some(self.state.round);
-                self.state.valid_block = Some(bh);
+                if self
+                    .proposed_blocks
+                    .get(&(self.state.height, self.state.round))
+                    == Some(&bh)
+                {
+                    self.state.valid_round = Some(self.state.round);
+                    self.state.valid_block = Some(bh);
+                }
             }
         }
 
         Ok(has_quorum)
+    }
+
+    /// Called only after the driver validates the proposal and durably signs its non-nil
+    /// precommit. Receiving a quorum for unknown data cannot create a local signing lock.
+    pub fn record_precommit_lock(
+        &mut self,
+        height: u64,
+        round: u32,
+        hash: Hash32,
+    ) -> Result<(), ConsensusError> {
+        if height != self.state.height
+            || round != self.state.round
+            || self.proposed_blocks.get(&(height, round)) != Some(&hash)
+            || self.get_prevoted_block_with_quorum(height, round) != Some(hash)
+            || self.state.locked_block.is_some_and(|locked| locked != hash)
+        {
+            return Err(ConsensusError::InvalidVote(
+                "cannot lock unvalidated, conflicting or nonquorum proposal".into(),
+            ));
+        }
+        self.state.locked_round = Some(round);
+        self.state.locked_block = Some(hash);
+        Ok(())
+    }
+
+    pub fn has_nil_precommit_quorum(&self, height: u64, round: u32) -> bool {
+        let power = self
+            .precommits
+            .iter()
+            .filter(|((h, r, _), vote)| *h == height && *r == round && vote.block_hash.is_none())
+            .filter_map(|((_, _, address), _)| {
+                self.val_set
+                    .validators()
+                    .iter()
+                    .find(|v| v.address == *address)
+                    .map(|v| v.voting_power)
+            })
+            .sum();
+        self.val_set.has_quorum(power)
+    }
+
+    pub fn retained_vote_count(&self) -> usize {
+        self.prevotes.len() + self.precommits.len()
     }
 
     /// Casts or receives a Precommit attestation. Returns aggregated commit signatures if +2/3 precommits reached.
