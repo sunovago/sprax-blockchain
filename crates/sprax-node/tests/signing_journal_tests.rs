@@ -62,7 +62,7 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
     );
     reopened.sign(current_vote, &signer).unwrap();
 }
-use sprax_crypto::Ed25519Keypair;
+use sprax_crypto::{Ed25519Keypair, Hasher};
 use sprax_node::signing_journal::SigningJournal;
 use sprax_types::Hash32;
 
@@ -91,7 +91,15 @@ fn durable_signer_replays_identical_votes_and_refuses_conflicts_after_reopen() {
     let key = Ed25519Keypair::generate();
     let identity = Hash32::new([11; 32]);
     let journal = SigningJournal::open(&path, identity, &key).unwrap();
-    let block = Hash32::new([12; 32]);
+    let mut header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([14; 32]));
+    header.height = 7;
+    header.parent_hash = Hash32::new([15; 32]);
+    let block_data = Block {
+        header,
+        body: BlockBody::default(),
+        last_commit: vec![],
+    };
+    let block = Hasher::block_hash(&block_data.header).unwrap();
     let first = vote(&key, 7, 2, VoteType::Prevote, Some(block));
     let signed = journal.sign(first.clone(), &key).unwrap();
     Ed25519Keypair::verify(
@@ -110,15 +118,27 @@ fn durable_signer_replays_identical_votes_and_refuses_conflicts_after_reopen() {
         .sign(vote(&key, 7, 1, VoteType::Precommit, Some(block)), &key)
         .is_err());
     journal
-        .sign(vote(&key, 7, 2, VoteType::Precommit, Some(block)), &key)
+        .sign_with_block(
+            vote(&key, 7, 2, VoteType::Precommit, Some(block)),
+            &key,
+            Some(block_data.clone()),
+        )
         .unwrap();
     drop(journal);
     let journal = SigningJournal::open(&path, identity, &key).unwrap();
     assert_eq!(journal.state().unwrap().unwrap().locked_block, Some(block));
+    assert_eq!(
+        journal.state().unwrap().unwrap().locked_block_data,
+        Some(block_data.clone())
+    );
+    let mut conflicting_block = block_data.clone();
+    conflicting_block.header.state_root = Hash32::ZERO;
+    let conflicting_hash = Hasher::block_hash(&conflicting_block.header).unwrap();
     assert!(journal
-        .sign(
-            vote(&key, 7, 3, VoteType::Prevote, Some(Hash32::ZERO)),
-            &key
+        .sign_with_block(
+            vote(&key, 7, 3, VoteType::Prevote, Some(conflicting_hash)),
+            &key,
+            Some(conflicting_block),
         )
         .is_err());
     journal
