@@ -3,7 +3,7 @@ use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
 use sprax_consensus::{SignedProposal, Vote, VoteType};
 use sprax_crypto::Ed25519Keypair;
-use sprax_types::Hash32;
+use sprax_types::{Block, Hash32};
 use std::{io::Write, path::Path, sync::Arc};
 
 const TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("signing");
@@ -11,6 +11,7 @@ const TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("signing");
 #[derive(Debug, Serialize, Deserialize)]
 struct Identity {
     vote_signing_version: u32,
+    journal_format_version: u32,
     genesis: Hash32,
     public_key: Vec<u8>,
 }
@@ -20,6 +21,7 @@ pub struct SigningState {
     pub vote: Vote,
     pub locked_block: Option<Hash32>,
     pub locked_round: Option<u32>,
+    pub locked_block_data: Option<Block>,
 }
 
 #[derive(Debug, Clone)]
@@ -43,6 +45,7 @@ impl SigningJournal {
         let db = Database::create(path).map_err(|e| e.to_string())?;
         let identity = Identity {
             vote_signing_version: 2,
+            journal_format_version: 2,
             genesis,
             public_key: signer.public_key_bytes().to_vec(),
         };
@@ -121,7 +124,7 @@ impl SigningJournal {
     ) -> Result<SignedProposal, String> {
         if proposal.genesis != self.genesis
             || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
-            || proposal.block.header.proposer != signer.address()
+            || proposal.signer != signer.address()
         {
             return Err("proposal signer or genesis does not match journal identity".into());
         }
@@ -180,7 +183,32 @@ impl SigningJournal {
 
     /// Database write transactions serialize competing callers; a signature is returned
     /// only after its record is durable. Identical retries return the persisted signature.
-    pub fn sign(&self, mut vote: Vote, signer: &Ed25519Keypair) -> Result<Vote, String> {
+    pub fn sign(&self, vote: Vote, signer: &Ed25519Keypair) -> Result<Vote, String> {
+        self.sign_with_block(vote, signer, None)
+    }
+
+    /// The caller must validate execution first. A non-nil precommit atomically
+    /// persists its complete block before releasing a signature.
+    pub fn sign_with_block(
+        &self,
+        mut vote: Vote,
+        signer: &Ed25519Keypair,
+        block: Option<Block>,
+    ) -> Result<Vote, String> {
+        if vote.vote_type == VoteType::Precommit && vote.block_hash.is_some() {
+            let data = block
+                .as_ref()
+                .ok_or("non-nil precommit requires complete validated block")?;
+            if data.header.height != vote.height
+                || Some(sprax_crypto::Hasher::block_hash(&data.header).map_err(|e| e.to_string())?)
+                    != vote.block_hash
+                || !data.last_commit.is_empty()
+            {
+                return Err("precommit block does not match vote or contains a certificate".into());
+            }
+        } else if block.is_some() {
+            return Err("block cache is only accepted with a non-nil precommit".into());
+        }
         if vote.genesis != self.genesis
             || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
             || vote.validator_address != signer.address()
@@ -218,6 +246,7 @@ impl SigningJournal {
             };
             let mut locked_block = None;
             let mut locked_round = None;
+            let mut locked_block_data = None;
             if let Some(previous) = previous {
                 if step(&vote) < step(&previous.vote) {
                     return Err("refusing signing state regression".into());
@@ -235,6 +264,7 @@ impl SigningJournal {
                 if previous.vote.height == vote.height {
                     locked_block = previous.locked_block;
                     locked_round = previous.locked_round;
+                    locked_block_data = previous.locked_block_data;
                     if locked_block.is_some()
                         && vote.block_hash.is_some()
                         && locked_block != vote.block_hash
@@ -246,12 +276,14 @@ impl SigningJournal {
             if vote.vote_type == VoteType::Precommit && vote.block_hash.is_some() {
                 locked_block = vote.block_hash;
                 locked_round = Some(vote.round);
+                locked_block_data = block;
             }
             vote.signature = signer.sign(&vote.sign_bytes().map_err(|e| e.to_string())?);
             let state = SigningState {
                 vote: vote.clone(),
                 locked_block,
                 locked_round,
+                locked_block_data,
             };
             let bytes = serde_json::to_vec(&state).map_err(|e| e.to_string())?;
             table

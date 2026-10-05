@@ -178,7 +178,7 @@ impl ValidatorSet {
         seed.extend_from_slice(commitment.as_bytes());
 
         let total = u128::from(self.total_voting_power);
-        let limit = u128::MAX - u128::from(u128::MAX % total);
+        let limit = u128::MAX - (u128::MAX % total);
         let mut counter = 0u32;
         let ticket = loop {
             seed.extend_from_slice(&counter.to_be_bytes());

@@ -14,6 +14,7 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
     header.parent_hash = Hash32::new([63; 32]);
     let proposal = SignedProposal {
         genesis,
+        signer: signer.address(),
         round: 2,
         block: Block {
             header,

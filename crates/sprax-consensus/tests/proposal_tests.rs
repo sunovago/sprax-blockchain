@@ -19,6 +19,7 @@ fn proposal_authentication_binds_genesis_round_height_and_header() {
     header.proposer = signer.address();
     let mut proposal = SignedProposal {
         genesis,
+        signer: signer.address(),
         round: 3,
         block: Block {
             header,
