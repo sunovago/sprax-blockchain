@@ -583,6 +583,14 @@ impl NodeService {
         }
         *self.p2p.write() = Some(p2p_service.clone());
 
+        if self.config.rpc.enable_json_rpc {
+            let rpc_port = self.config.rpc.json_rpc_port;
+            match crate::rpc_server::RpcServer::start(self.clone(), rpc_port).await {
+                Ok(handle) => *self.rpc_server.write() = Some(handle),
+                Err(error) => return Err(error),
+            }
+        }
+
         info!(
             chain_id = %self.config.chain_id,
             environment = %self.config.environment,
@@ -685,14 +693,6 @@ impl NodeService {
             }
         }
 
-        if self.config.rpc.enable_json_rpc {
-            let rpc_port = self.config.rpc.json_rpc_port;
-            match crate::rpc_server::RpcServer::start(self.clone(), rpc_port).await {
-                Ok(handle) => *self.rpc_server.write() = Some(handle),
-                Err(error) => return Err(error),
-            }
-        }
-
         Ok(())
     }
 
@@ -784,9 +784,27 @@ mod tests {
         let p2p = reserved.local_addr().unwrap().port();
         drop(reserved);
         let mut service = NodeService::new_or_load(temp.path().to_path_buf()).unwrap();
+        service.config.consensus.enabled = true;
+        service.config.consensus.local_validator_key_name = Some("alice".into());
         service.override_listen_ports(Some(p2p), Some(rpc));
         assert!(service.start().await.is_err());
         assert!(!service.is_running());
+        let signer = service.keyring.read().get_ed25519_keypair("alice").unwrap();
+        let journal = crate::signing_journal::SigningJournal::open(
+            &temp.path().join("data/validator-signing.redb"),
+            service.ledger.read().genesis().fingerprint().unwrap(),
+            &signer,
+        )
+        .unwrap();
+        assert!(
+            journal.state().unwrap().is_none(),
+            "failed startup must not release votes"
+        );
+        assert!(
+            journal.latest_proposal().unwrap().is_none(),
+            "failed startup must not release proposals"
+        );
+        drop(journal);
         drop(occupied);
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
         loop {
