@@ -344,10 +344,11 @@ impl ConsensusDriver {
                 );
                 return;
             }
-            if now >= prevote_deadline && !self.precommitted_this_round {
-                if self.cast_nil_precommit(height, round).await {
-                    return;
-                }
+            if now >= prevote_deadline
+                && !self.precommitted_this_round
+                && self.cast_nil_precommit(height, round).await
+            {
+                return;
             }
             let wake = if !self.precommitted_this_round && Instant::now() < prevote_deadline {
                 prevote_deadline.min(deadline)
