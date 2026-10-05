@@ -39,6 +39,25 @@ fn valid_certificate_at_nonzero_round_verifies() {
 }
 
 #[test]
+fn certificates_reject_oversized_collections_and_signature_buffers() {
+    let (block, validators) = fixture();
+    let mut oversized = block.clone();
+    oversized.last_commit = vec![block.last_commit[0].clone(); 5];
+    let error = verify_block_commit(&oversized, &validators)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("oversized certificate"));
+    for length in [0, 63, 65, 1024 * 1024] {
+        let mut malformed = block.clone();
+        malformed.last_commit[0].signature = vec![0; length];
+        let error = verify_block_commit(&malformed, &validators)
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("invalid signature length"));
+    }
+}
+
+#[test]
 fn forged_duplicate_insufficient_or_replayed_certificates_fail() {
     let (block, validators) = fixture();
     let mut bad = block.clone();

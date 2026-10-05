@@ -80,6 +80,10 @@ Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 
   migrations, and IBC are explicitly unsupported in this execution profile.
 - Expiration, transaction gas, account nonce exhaustion, block gas/size, increasing block
   timestamps, and bounded unique validator voting power are checked.
+- Transaction selection reserves a serialized worst-case certificate for every active
+  validator, including maximum round/timestamp widths and signature byte-array encoding.
+  Transactions that only fit an unsigned proposal remain pending. Certificate verification
+  rejects excessive signer counts and non-64-byte signatures before hashing/signature work.
 - Testnet/mainnet require explicit genesis; known public development validator keys are
   rejected. Fresh non-development keyrings do not seed development private keys.
 

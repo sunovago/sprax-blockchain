@@ -5,6 +5,17 @@ use std::collections::HashSet;
 
 /// Verifies a unique, same-round, signed >2/3 certificate for this exact block.
 pub fn verify_block_commit(block: &Block, validators: &ValidatorSet) -> Result<(), ConsensusError> {
+    // Bound certificate work before hashing or verifying any attacker-supplied signature.
+    if block.last_commit.len() > validators.validators().len()
+        || block
+            .last_commit
+            .iter()
+            .any(|commit| commit.signature.len() != 64)
+    {
+        return Err(ConsensusError::InvalidVote(
+            "oversized certificate or invalid signature length".into(),
+        ));
+    }
     if block.header.validator_set_hash != validators.commitment()? {
         return Err(ConsensusError::InvalidVote(
             "commit validator-set commitment mismatch".into(),

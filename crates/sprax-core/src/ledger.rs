@@ -475,14 +475,53 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         let mut receipts = Vec::with_capacity(pending_txs.len());
         let mut tx_hashes = Vec::with_capacity(pending_txs.len());
         let mut reserved_gas = 0u64;
-        let mut reserved_bytes = 1024usize;
+        // Reserve the complete worst-case certificate before selecting transactions.
+        // JSON byte arrays vary with the values of hashes/signatures, so use 255s
+        // and maximum integer widths rather than the unsigned proposal's length.
+        let worst_hash = Hash32::new([255; 32]);
+        let envelope = Block {
+            header: BlockHeader {
+                version: 1,
+                chain_id: self.genesis.chain_id.clone(),
+                height: current_height,
+                timestamp_unix_secs: parent_timestamp + 2,
+                parent_hash,
+                proposer,
+                state_root: worst_hash,
+                txs_root: worst_hash,
+                receipts_root: worst_hash,
+                validator_set_hash: val_set_hash,
+            },
+            body: BlockBody::default(),
+            last_commit: self
+                .active_validators()?
+                .iter()
+                .map(|validator| sprax_types::CommitSignature {
+                    round: u32::MAX,
+                    validator_address: validator.address,
+                    signature: vec![255; 64],
+                    timestamp_unix_secs: u64::MAX,
+                })
+                .collect(),
+        };
+        let mut reserved_bytes = serde_json::to_vec(&envelope)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .len();
+        if reserved_bytes > self.genesis.consensus_params.max_block_size_bytes {
+            return Err(CoreError::StateError(
+                "block limit cannot fit validator certificate".into(),
+            ));
+        }
 
         for tx in pending_txs {
             let bytes = serde_json::to_vec(&tx)
                 .map_err(|e| CoreError::StateError(e.to_string()))?
                 .len();
             let next_gas = reserved_gas.checked_add(tx.body.fee.gas_limit);
-            let next_bytes = reserved_bytes.checked_add(bytes);
+            // One comma per transaction is a conservative array separator bound.
+            let next_bytes = reserved_bytes
+                .checked_add(bytes)
+                .and_then(|n| n.checked_add(1));
             if next_gas.is_none_or(|gas| gas > self.genesis.consensus_params.max_block_gas)
                 || next_bytes
                     .is_none_or(|size| size > self.genesis.consensus_params.max_block_size_bytes)

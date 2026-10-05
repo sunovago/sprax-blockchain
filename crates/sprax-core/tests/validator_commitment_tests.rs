@@ -105,3 +105,44 @@ fn restart_rejects_legacy_genesis_commitments_and_unfinalized_state_mutations() 
         .unwrap();
     assert!(ChainLedger::open_or_init(store, || Ok(g)).is_err());
 }
+
+#[test]
+fn transaction_selection_reserves_the_final_certificate_and_keeps_deferred_transactions() {
+    let (mut g, alice, bob) = genesis();
+    let mut baseline = ChainLedger::init_from_genesis(g.clone()).unwrap();
+    let empty = baseline.build_proposal(alice.address()).unwrap();
+    let body = TxBody {
+        chain_id: ChainId::new(g.chain_id.clone()).unwrap(),
+        sender: bob.address(),
+        nonce: 0,
+        messages: vec![TxMessage::Delegate {
+            validator: alice.address(),
+            amount: Amount::from_sprx_whole(1).unwrap(),
+        }],
+        fee: TxFee::default(),
+        memo: "x".repeat(2000),
+        timeout_height: 10,
+    };
+    let signature = bob.sign(&body.sign_bytes().unwrap());
+    let tx = Transaction::new(
+        body,
+        KeyType::Ed25519,
+        bob.public_key_bytes().to_vec(),
+        signature,
+    )
+    .unwrap();
+    // The transaction fits the unsigned block, but would overflow once certified.
+    g.consensus_params.max_block_size_bytes =
+        serde_json::to_vec(&empty).unwrap().len() + serde_json::to_vec(&tx).unwrap().len() + 1;
+    let mut ledger = ChainLedger::init_from_genesis(g.clone()).unwrap();
+    ledger.submit_transaction(tx).unwrap();
+    let proposal = ledger.build_proposal(alice.address()).unwrap();
+    assert!(proposal.body.transactions.is_empty());
+    assert_eq!(ledger.height(), 0);
+    let finalized = ledger.mine_block(alice.address()).unwrap();
+    assert!(finalized.body.transactions.is_empty());
+    assert!(
+        serde_json::to_vec(&finalized).unwrap().len() <= g.consensus_params.max_block_size_bytes
+    );
+    assert_eq!(ledger.mempool_len(), 1);
+}
