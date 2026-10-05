@@ -122,7 +122,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
     // Height 1: All 4 honest validators active
     engine.start_height(1);
     let proposal_hash = Hash32::new([0xbb; 32]);
-    let proposer = engine.select_proposer();
+    let proposer = engine.select_proposer(Hash32::ZERO, 1, 0).unwrap();
     engine
         .propose_block(proposal_hash, proposer.address)
         .unwrap();
@@ -159,7 +159,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
     // 3 out of 4 validators (75% power > 66.7% quorum) reach consensus!
     engine.start_height(2);
     let proposal_hash_2 = Hash32::new([0xcc; 32]);
-    let proposer_2 = engine.select_proposer();
+    let proposer_2 = engine.select_proposer(Hash32::ZERO, 2, 0).unwrap();
     engine
         .propose_block(proposal_hash_2, proposer_2.address)
         .unwrap();

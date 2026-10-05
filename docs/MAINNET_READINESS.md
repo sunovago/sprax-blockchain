@@ -15,6 +15,10 @@ Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 
   in the certificate for height H+1. Top-100 selection and ordering are deterministic.
   Commit verification, block gossip, historical catch-up, startup and validator RPCs use
   the same canonical set instead of trusting staking.json or an in-memory staking cache.
+- Round proposer selection is deterministically weighted from genesis fingerprint, height,
+  round and the canonical active-set commitment. It no longer depends on process-local DWRR
+  priority, so restarts and missed rounds do not reset a node onto a different proposer.
+  This replaces the earlier DWRR schedule and requires a coordinated protocol upgrade.
 - Signed equivocation observations are bounded/deduplicated in a local memory pool. Peer
   arrival never changes stake, jail status, state root or consensus power. The unsafe direct
   ledger slash API was removed. Finalized, chain-bound economic evidence processing remains

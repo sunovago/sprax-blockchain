@@ -27,7 +27,7 @@ fn test_scenario_1_honest_validators_bft_round_convergence() {
     engine.start_height(1);
     assert_eq!(engine.current_step(), RoundStep::Propose);
 
-    let proposer = engine.select_proposer();
+    let proposer = engine.select_proposer(Hash32::ZERO, 1, 0).unwrap();
     let proposal_hash = Hash32::new([0xbb; 32]);
     engine
         .propose_block(proposal_hash, proposer.address)

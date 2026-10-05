@@ -61,12 +61,39 @@ impl ConsensusDriver {
             .map_err(ConsensusError::InvalidVote)?;
         let mut last_attempted_height = 0;
         let mut current_round = 0;
+        let mut pending_block = None;
         if let Some(saved) = saved {
             if saved.vote.height == engine.current_height() {
                 last_attempted_height = saved.vote.height;
                 current_round = saved.vote.round;
-                if let (Some(block), Some(round)) = (saved.locked_block, saved.locked_round) {
-                    engine.restore_lock(saved.vote.height, round, block);
+                match (
+                    saved.locked_block,
+                    saved.locked_round,
+                    saved.locked_block_data,
+                ) {
+                    (Some(hash), Some(round), Some(block)) => {
+                        if Hasher::block_hash(&block.header).ok() != Some(hash) {
+                            return Err(ConsensusError::InvalidVote(
+                                "durable lock block hash mismatch".into(),
+                            ));
+                        }
+                        ledger
+                            .read()
+                            .validate_proposal(block.clone())
+                            .map_err(|e| {
+                                ConsensusError::InvalidVote(format!(
+                                    "invalid recovered locked block: {e}"
+                                ))
+                            })?;
+                        engine.restore_lock(saved.vote.height, round, hash);
+                        pending_block = Some(block);
+                    }
+                    (None, None, None) => {}
+                    _ => {
+                        return Err(ConsensusError::InvalidVote(
+                            "incomplete durable lock data".into(),
+                        ))
+                    }
                 }
             }
         }
@@ -92,7 +119,7 @@ impl ConsensusDriver {
             inbound_proposal_rx,
             is_running,
             precommitted_this_round: false,
-            pending_block: None,
+            pending_block,
             last_attempted_height,
             current_round,
             min_peers_before_start,
@@ -171,9 +198,37 @@ impl ConsensusDriver {
         self.engine.start_height(next_height);
         self.engine.set_round(round);
         self.precommitted_this_round = false;
-        self.pending_block = None;
+        self.pending_block = if self.engine.locked_block().is_some() {
+            self.signing_journal
+                .state()
+                .ok()
+                .flatten()
+                .filter(|state| state.vote.height == next_height)
+                .and_then(|state| state.locked_block_data)
+        } else {
+            None
+        };
 
-        let proposer = self.engine.select_proposer();
+        let genesis = match self.ledger.read().genesis().fingerprint() {
+            Ok(genesis) => genesis,
+            Err(error) => {
+                warn!(
+                    height = next_height,
+                    "cannot derive proposer genesis: {error}"
+                );
+                return;
+            }
+        };
+        let proposer = match self.engine.select_proposer(genesis, next_height, round) {
+            Ok(proposer) => proposer,
+            Err(error) => {
+                warn!(
+                    height = next_height,
+                    round, "cannot select deterministic proposer: {error}"
+                );
+                return;
+            }
+        };
         let local_addr = self.local_key.address();
 
         let block_hash = if proposer.address == local_addr {
@@ -215,7 +270,19 @@ impl ConsensusDriver {
         round: u32,
         proposer_addr: Address,
     ) -> Option<Hash32> {
-        let mined = match self.ledger.read().build_proposal(proposer_addr) {
+        let built = if self.engine.locked_block().is_some() {
+            let cached = self.pending_block.clone()?;
+            if Hasher::block_hash(&cached.header).ok() != self.engine.locked_block() {
+                return None;
+            }
+            self.ledger
+                .read()
+                .validate_proposal(cached.clone())
+                .map(|_| cached)
+        } else {
+            self.ledger.read().build_proposal(proposer_addr)
+        };
+        let mined = match built {
             Ok(b) => b,
             Err(e) => {
                 warn!(height, "failed to mine proposed block: {e}");
@@ -233,6 +300,7 @@ impl ConsensusDriver {
         let genesis = self.ledger.read().genesis().fingerprint().ok()?;
         let proposal = SignedProposal {
             genesis,
+            signer: proposer_addr,
             round,
             block: mined,
             signature: Vec::new(),
@@ -291,14 +359,6 @@ impl ConsensusDriver {
             warn!(height, round, "propose timeout / no proposal received");
             return None;
         };
-
-        if block.header.proposer != expected_proposer {
-            warn!(
-                height,
-                round, "received proposal from unexpected proposer, ignoring"
-            );
-            return None;
-        }
 
         let apply_result = self.ledger.read().validate_proposal(block.clone());
         match apply_result {
@@ -599,8 +659,13 @@ impl ConsensusDriver {
             self.local_key.address(),
             vec![],
         );
+        let block = if vote_type == VoteType::Precommit && block_hash.is_some() {
+            self.pending_block.clone()
+        } else {
+            None
+        };
         self.signing_journal
-            .sign(vote, &self.local_key)
+            .sign_with_block(vote, &self.local_key, block)
             .map_err(|error| {
                 warn!(height, round, "validator signing refused: {error}");
                 ConsensusError::InvalidVote(error)
@@ -666,6 +731,7 @@ mod tests {
             .sign_proposal(
                 SignedProposal {
                     genesis: identity,
+                    signer: key.address(),
                     round: 7,
                     block: ledger.build_proposal(key.address()).unwrap(),
                     signature: vec![],

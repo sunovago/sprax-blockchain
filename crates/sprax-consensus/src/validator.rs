@@ -22,7 +22,7 @@ impl Validator {
     }
 }
 
-/// Active validator set with deterministic weighted round-robin proposer selection.
+/// Active validator set with deterministic weighted proposer selection.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ValidatorSet {
     validators: Vec<Validator>,
@@ -158,6 +158,55 @@ impl ValidatorSet {
             .saturating_sub(total_power);
 
         self.validators[max_idx].clone()
+    }
+
+    /// Selects a weighted proposer from immutable consensus coordinates. Every node,
+    /// including a node returning after downtime, derives the same validator without
+    /// relying on process-local priority state. Rejection sampling avoids modulo bias.
+    pub fn select_proposer_for_round(
+        &self,
+        genesis: sprax_types::Hash32,
+        height: u64,
+        round: u32,
+    ) -> Result<Validator, ConsensusError> {
+        let commitment = self.commitment()?;
+        let mut seed = Vec::with_capacity(128);
+        seed.extend_from_slice(b"sprax/proposer/v1");
+        seed.extend_from_slice(genesis.as_bytes());
+        seed.extend_from_slice(&height.to_be_bytes());
+        seed.extend_from_slice(&round.to_be_bytes());
+        seed.extend_from_slice(commitment.as_bytes());
+
+        let total = u128::from(self.total_voting_power);
+        let limit = u128::MAX - u128::from(u128::MAX % total);
+        let mut counter = 0u32;
+        let ticket = loop {
+            seed.extend_from_slice(&counter.to_be_bytes());
+            let hash = sprax_crypto::Hasher::sha256(&seed);
+            seed.truncate(seed.len() - 4);
+            let candidate = u128::from_be_bytes(
+                hash.as_bytes()[..16]
+                    .try_into()
+                    .expect("fixed-size hash prefix"),
+            );
+            if candidate < limit {
+                break candidate % total;
+            }
+            counter = counter.checked_add(1).ok_or_else(|| {
+                ConsensusError::InvalidValidatorSet("proposer draw counter exhausted".into())
+            })?;
+        };
+
+        let mut cumulative = 0u128;
+        for validator in &self.validators {
+            cumulative += u128::from(validator.voting_power);
+            if ticket < cumulative {
+                return Ok(validator.clone());
+            }
+        }
+        Err(ConsensusError::InvalidValidatorSet(
+            "proposer ticket falls outside total voting power".into(),
+        ))
     }
 }
 

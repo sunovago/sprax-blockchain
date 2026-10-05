@@ -76,26 +76,9 @@ impl BftConsensusEngine {
         &self.val_set
     }
 
-    /// Replaces the active validator set (e.g. reflecting the latest `StakingKeeper` state at
-    /// the start of a new height, after delegations/slashing since the last height).
-    ///
-    /// Carries `proposer_priority` forward for validators present in both the old and new set:
-    /// `StakingKeeper::get_active_validator_set` builds fresh `Validator` instances (priority
-    /// always 0) on every call, so naively replacing the set here would reset DWRR state every
-    /// single height — which breaks fairness (the highest-stake validator would win every
-    /// height's initial-priority tiebreak forever) rather than rotating proposers over time.
-    /// Only validators new to the set start at priority 0.
-    pub fn set_validator_set(&mut self, mut val_set: ValidatorSet) {
-        for new_val in val_set.validators_mut() {
-            if let Some(old_val) = self
-                .val_set
-                .validators()
-                .iter()
-                .find(|v| v.address == new_val.address)
-            {
-                new_val.proposer_priority = old_val.proposer_priority;
-            }
-        }
+    /// Replaces the active validator set at a finalized height boundary.
+    /// Proposer selection depends only on genesis, height, round and this committed set.
+    pub fn set_validator_set(&mut self, val_set: ValidatorSet) {
         self.val_set = val_set;
     }
 
@@ -153,9 +136,15 @@ impl BftConsensusEngine {
         self.proposed_blocks.retain(|(h, r), _| retained(*h, *r));
     }
 
-    /// Selects the deterministic proposer for the current round using DWRR.
-    pub fn select_proposer(&mut self) -> Validator {
-        self.val_set.select_proposer()
+    /// Selects a deterministic weighted proposer without process-local round history.
+    pub fn select_proposer(
+        &self,
+        genesis: sprax_types::Hash32,
+        height: u64,
+        round: u32,
+    ) -> Result<Validator, ConsensusError> {
+        self.val_set
+            .select_proposer_for_round(genesis, height, round)
     }
 
     /// Submits a block proposal for the current (height, round).
@@ -440,7 +429,7 @@ mod tests {
         engine.start_height(1);
         assert_eq!(engine.current_step(), RoundStep::Propose);
 
-        let proposer = engine.select_proposer();
+        let proposer = engine.select_proposer(Hash32::ZERO, 1, 0).unwrap();
         let proposal_hash = Hash32::new([0xaa; 32]);
         engine
             .propose_block(proposal_hash, proposer.address)
