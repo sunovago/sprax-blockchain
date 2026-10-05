@@ -109,7 +109,7 @@ fn restart_rejects_legacy_genesis_commitments_and_unfinalized_state_mutations() 
 #[test]
 fn transaction_selection_reserves_the_final_certificate_and_keeps_deferred_transactions() {
     let (mut g, alice, bob) = genesis();
-    let mut baseline = ChainLedger::init_from_genesis(g.clone()).unwrap();
+    let baseline = ChainLedger::init_from_genesis(g.clone()).unwrap();
     let empty = baseline.build_proposal(alice.address()).unwrap();
     let body = TxBody {
         chain_id: ChainId::new(g.chain_id.clone()).unwrap(),
