@@ -63,6 +63,9 @@ Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 
   leaves signing disabled until operator configuration. CLI port overrides affect listeners.
   Containers quote argument arrays and require explicit non-development initialization;
   the daemon handles both SIGINT and SIGTERM for shutdown.
+- Shutdown aborts and joins service-owned consensus/gossip/evidence tasks before returning,
+  releasing the validator signing database before an immediate restart. Runtime startup errors
+  share the same cleanup path instead of leaving partially started consensus tasks online.
 - Node startup reports P2P/RPC bind failures instead of reporting an online service. RPC
   handles drain on stop, allowing listener reuse. An explicitly configured signing key must
   exist and match an active validator; the selected home governs the journal path after moves.

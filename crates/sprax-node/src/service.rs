@@ -43,6 +43,7 @@ pub struct NodeService {
     keyring: Arc<RwLock<Keyring>>,
     p2p: Arc<RwLock<Option<P2pService>>>,
     rpc_server: Arc<RwLock<Option<crate::rpc_server::RpcServerHandle>>>,
+    background_tasks: Arc<RwLock<Vec<tokio::task::JoinHandle<()>>>>,
     is_running: Arc<AtomicBool>,
     is_syncing: Arc<AtomicBool>,
 }
@@ -198,6 +199,7 @@ impl NodeService {
             keyring: Arc::new(RwLock::new(keyring)),
             p2p: Arc::new(RwLock::new(None)),
             rpc_server: Arc::new(RwLock::new(None)),
+            background_tasks: Arc::new(RwLock::new(Vec::new())),
             is_running: Arc::new(AtomicBool::new(false)),
             is_syncing: Arc::new(AtomicBool::new(false)),
         })
@@ -517,6 +519,21 @@ impl NodeService {
             return Err(NodeError::RuntimeError("node is already running".into()));
         }
 
+        let result = self
+            .start_runtime(local_validator_key, initial_val_set, signing_journal)
+            .await;
+        if result.is_err() {
+            self.stop().await?;
+        }
+        result
+    }
+
+    async fn start_runtime(
+        &self,
+        local_validator_key: Option<Ed25519Keypair>,
+        initial_val_set: Option<sprax_consensus::ValidatorSet>,
+        signing_journal: Option<crate::signing_journal::SigningJournal>,
+    ) -> Result<(), NodeError> {
         let (inbound_tx_tx, mut inbound_tx_rx) = mpsc::channel::<Transaction>(128);
         let (inbound_block_tx, mut inbound_block_rx) = mpsc::channel::<Block>(16);
         let (inbound_vote_tx, inbound_vote_rx) = mpsc::channel(4096);
@@ -560,7 +577,6 @@ impl NodeService {
 
         // Start P2P listener & bootstrap dialing
         if let Err(error) = p2p_service.start(header.height, latest_hash).await {
-            self.is_running.store(false, Ordering::SeqCst);
             return Err(NodeError::RuntimeError(format!(
                 "failed to start P2P: {error}"
             )));
@@ -581,7 +597,7 @@ impl NodeService {
         let is_running = Arc::clone(&self.is_running);
 
         // Background Inbound Gossip Processor
-        tokio::spawn(async move {
+        self.background_tasks.write().push(tokio::spawn(async move {
             while is_running.load(Ordering::SeqCst) {
                 tokio::select! {
                     Some(tx) = inbound_tx_rx.recv() => {
@@ -605,13 +621,15 @@ impl NodeService {
                     else => break,
                 }
             }
-        });
+        }));
 
-        tokio::spawn(crate::consensus_driver::run_evidence_listener(
-            Arc::clone(&self.ledger),
-            Arc::clone(&self.evidence_pool),
-            inbound_evidence_rx,
-            Arc::clone(&self.is_running),
+        self.background_tasks.write().push(tokio::spawn(
+            crate::consensus_driver::run_evidence_listener(
+                Arc::clone(&self.ledger),
+                Arc::clone(&self.evidence_pool),
+                inbound_evidence_rx,
+                Arc::clone(&self.is_running),
+            ),
         ));
 
         if self.config.consensus.enabled {
@@ -637,7 +655,9 @@ impl NodeService {
                     self.config.network.bootstrap_peers.len(),
                 )
                 .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
-                tokio::spawn(driver.run());
+                self.background_tasks
+                    .write()
+                    .push(tokio::spawn(driver.run()));
             } else {
                 warn!(
                     "consensus.enabled is true but no local_validator_key_name configured; \
@@ -646,7 +666,7 @@ impl NodeService {
             }
         } else {
             let is_running = Arc::clone(&self.is_running);
-            tokio::spawn(async move {
+            self.background_tasks.write().push(tokio::spawn(async move {
                 let mut vote_rx = inbound_vote_rx;
                 let mut proposal_rx = inbound_proposal_rx;
                 while is_running.load(Ordering::SeqCst) {
@@ -656,7 +676,7 @@ impl NodeService {
                         else => break,
                     }
                 }
-            });
+            }));
             if self.config.consensus.enabled {
                 warn!(
                     "consensus.enabled is true but no local_validator_key_name configured; \
@@ -669,10 +689,7 @@ impl NodeService {
             let rpc_port = self.config.rpc.json_rpc_port;
             match crate::rpc_server::RpcServer::start(self.clone(), rpc_port).await {
                 Ok(handle) => *self.rpc_server.write() = Some(handle),
-                Err(error) => {
-                    self.stop().await?;
-                    return Err(error);
-                }
+                Err(error) => return Err(error),
             }
         }
 
@@ -689,6 +706,13 @@ impl NodeService {
             p2p.stop();
         }
 
+        let tasks = std::mem::take(&mut *self.background_tasks.write());
+        for task in &tasks {
+            task.abort();
+        }
+        for task in tasks {
+            let _ = task.await;
+        }
         let rpc_handle = self.rpc_server.write().take();
         if let Some(handle) = rpc_handle {
             handle.stop().await;
@@ -803,6 +827,30 @@ mod tests {
             .contains("not an active validator"));
         assert!(!service.is_running());
         assert!(!temp.path().join("data/validator-signing.redb").exists());
+    }
+
+    #[tokio::test]
+    async fn validator_stop_releases_signing_database_before_immediate_restart() {
+        let temp = tempfile::tempdir().unwrap();
+        let mut service = NodeService::new_or_load(temp.path().to_path_buf()).unwrap();
+        service.config.consensus.enabled = true;
+        service.config.consensus.local_validator_key_name = Some("alice".into());
+        service.override_listen_ports(Some(0), Some(0));
+        service.start().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        service.stop().await.unwrap();
+        assert!(service.background_tasks.read().is_empty());
+        let key = service.keyring.read().get_ed25519_keypair("alice").unwrap();
+        let journal = crate::signing_journal::SigningJournal::open(
+            &temp.path().join("data/validator-signing.redb"),
+            service.ledger.read().genesis().fingerprint().unwrap(),
+            &key,
+        )
+        .unwrap();
+        drop(journal);
+        service.start().await.unwrap();
+        service.stop().await.unwrap();
+        assert!(service.background_tasks.read().is_empty());
     }
 
     #[tokio::test]
