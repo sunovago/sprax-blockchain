@@ -165,9 +165,7 @@ async fn handle_json_rpc(
             let metrics = state.node.metrics();
             let val_count = state
                 .node
-                .staking()
-                .read()
-                .get_active_validator_set()
+                .canonical_validator_set()
                 .map(|vs| vs.validators().len())
                 .unwrap_or(0);
 
@@ -357,7 +355,7 @@ async fn handle_json_rpc(
         }
 
         "sprax_getValidators" => {
-            let val_set_res = state.node.staking().read().get_active_validator_set();
+            let val_set_res = state.node.canonical_validator_set();
             match val_set_res {
                 Ok(val_set) => {
                     let vals: Vec<Value> = val_set

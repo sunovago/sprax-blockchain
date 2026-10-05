@@ -16,3 +16,5 @@ pub use keyring::{KeyRecord, Keyring};
 pub use rpc_server::RpcServer;
 pub use service::{NodeMetrics, NodeService};
 pub use telemetry::init_telemetry;
+
+pub mod evidence_pool;

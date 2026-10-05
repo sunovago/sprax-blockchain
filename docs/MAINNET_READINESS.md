@@ -1,6 +1,6 @@
 # Mainnet readiness
 
-Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 complete",
+Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 complete",
 "genesis ready", and "cleared for mainnet" claims.
 
 ## Current hardening changes
@@ -10,6 +10,15 @@ Updated: 2026-10-04. Status: INCOMPLETE. This file supersedes historical "12/12 
 - Proposal construction and validation do not advance finalized height or persist state.
 - Finalized blocks commit state, block data, transaction indexes, and height in one redb
   transaction. Memory caches are updated only after that transaction succeeds.
+- Validator identities/power come from the genesis registry and committed ledger stake.
+  A block commits the active set from state at height H-1; delegation changes take effect
+  in the certificate for height H+1. Top-100 selection and ordering are deterministic.
+  Commit verification, block gossip, historical catch-up, startup and validator RPCs use
+  the same canonical set instead of trusting staking.json or an in-memory staking cache.
+- Signed equivocation observations are bounded/deduplicated in a local memory pool. Peer
+  arrival never changes stake, jail status, state root or consensus power. The unsafe direct
+  ledger slash API was removed. Finalized, chain-bound economic evidence processing remains
+  unfinished; the observation pool is not persistent and does not implement slashing.
 - The consensus driver waits for precommit quorum before applying a proposal.
 - Block commit certificates carry the consensus round and are checked for valid signatures,
   unique known signers, a consistent round, and more than two-thirds voting power.
@@ -117,12 +126,13 @@ verify the chain changes above or a live deployment.
    pagination beyond the configured scan limits remains a future capability.
 3. Complete BFT round synchronization and locked proposal handling,
    safe unlocking/reproposal after restart, commit validation during historical catch-up,
-   and deterministic validator-set transitions and slashing. Current staking-cache and
-   peer-evidence updates are not sufficient evidence of consensus-safe economic transitions.
+   and complete validator registration/jail/tombstone transitions and canonical slashing.
+   Delegation-driven power commitments and sequential certificate catch-up are implemented;
+   peer observations are quarantined and have no economic effect.
 4. Exercise three or more active validators through partitions, Byzantine input, proposer
    failures, restarts, catch-up, and sustained load. Existing two-validator-plus-observer tests
    do not establish these properties.
-5. Finish per-height validator commitments, storage recovery, pruning/rebuild compatibility,
+5. Finish storage recovery, pruning/rebuild compatibility,
    byte budgets and overload recovery for bounded network queues, block resource limits
    including commit overhead, and performance of archive/overlay reads. Genesis accounting
    and configured genesis identity on restart have regression coverage.
@@ -142,6 +152,10 @@ verify the chain changes above or a live deployment.
 Passing local tests or producing configuration files alone does not close these gates.
 
 ## Upgrade compatibility
+
+The canonical validator commitment encoding replaces the historical genesis-validator JSON
+hash and the copied-parent header placeholder. Existing block histories require an explicit,
+reviewed migration; do not mix binaries with the two commitment encodings.
 
 These protocol changes require a coordinated new testnet/genesis or a separately reviewed
 migration. Legacy databases without the genesis identity are rejected, never silently reset.

@@ -27,6 +27,7 @@ pub struct ConsensusDriver {
     p2p: P2pService,
     local_key: Ed25519Keypair,
     signing_journal: SigningJournal,
+    evidence_pool: Arc<RwLock<crate::evidence_pool::EvidencePool>>,
     timeouts: ConsensusTimeoutConfig,
     inbound_vote_rx: mpsc::Receiver<Vote>,
     inbound_proposal_rx: mpsc::Receiver<SignedProposal>,
@@ -47,6 +48,7 @@ impl ConsensusDriver {
         ledger: Arc<RwLock<ChainLedger<RedbStore>>>,
         p2p: P2pService,
         local_key: Ed25519Keypair,
+        evidence_pool: Arc<RwLock<crate::evidence_pool::EvidencePool>>,
         signing_journal: SigningJournal,
         timeouts: ConsensusTimeoutConfig,
         inbound_vote_rx: mpsc::Receiver<Vote>,
@@ -75,6 +77,7 @@ impl ConsensusDriver {
             p2p,
             local_key,
             signing_journal,
+            evidence_pool,
             timeouts,
             inbound_vote_rx,
             inbound_proposal_rx,
@@ -109,7 +112,7 @@ impl ConsensusDriver {
     }
 
     async fn wait_for_peers_if_needed(&self) {
-        let val_set = match self.staking.read().get_active_validator_set() {
+        let val_set = match self.canonical_validator_set() {
             Ok(vs) => vs,
             Err(_) => return,
         };
@@ -146,7 +149,7 @@ impl ConsensusDriver {
             0
         };
 
-        let val_set_result = self.staking.read().get_active_validator_set();
+        let val_set_result = self.canonical_validator_set();
         let val_set = match val_set_result {
             Ok(vs) => vs,
             Err(e) => {
@@ -375,24 +378,13 @@ impl ConsensusDriver {
                 vote_a: conflicting,
                 vote_b: vote.clone(),
             };
-            if evidence.is_valid_equivocation() {
-                if let Ok(slashed) = self.staking.write().slash_equivocation(&evidence) {
-                    if !slashed.is_zero() {
-                        if let Err(e) = self
-                            .ledger
-                            .read()
-                            .apply_slash(&vote.validator_address, slashed)
-                        {
-                            warn!(validator = %vote.validator_address, "failed to apply slash to canonical stake: {e}");
-                        }
-                        warn!(
-                            validator = %vote.validator_address,
-                            %slashed,
-                            "equivocation detected: validator slashed"
-                        );
-                        self.p2p.broadcast_evidence(evidence);
-                    }
-                }
+            let recorded = self
+                .evidence_pool
+                .write()
+                .insert(evidence.clone(), self.ledger.read().genesis());
+            if matches!(recorded, Ok(true)) {
+                warn!(validator = %vote.validator_address, "equivocation observed; economic transition requires finalized evidence processing");
+                self.p2p.broadcast_evidence(evidence);
             }
         }
 
@@ -489,7 +481,7 @@ impl ConsensusDriver {
     /// Re-syncs every known validator's cached `tokens` in `StakingKeeper` (the BFT-facing
     /// active-validator-set cache) from `sprax-core`'s canonical, transaction-driven
     /// `ValidatorStakeState` — the source of truth updated by `Delegate`/`Unbond` transactions
-    /// and by `apply_slash`. Called once per finalized height so the next height's proposer
+    /// in finalized blocks. Called once per finalized height so the display cache
     /// selection / quorum weighting reflects that height's staking activity.
     fn sync_stake_from_ledger(&self) {
         let addresses = self.staking.read().all_validator_addresses();
@@ -503,6 +495,15 @@ impl ConsensusDriver {
                 }
             }
         }
+    }
+
+    fn canonical_validator_set(&self) -> Result<sprax_consensus::ValidatorSet, ConsensusError> {
+        sprax_consensus::ValidatorSet::from_canonical(
+            self.ledger
+                .read()
+                .active_validators()
+                .map_err(|e| ConsensusError::InvalidValidatorSet(e.to_string()))?,
+        )
     }
 
     fn build_signed_vote(
@@ -530,48 +531,25 @@ impl ConsensusDriver {
 }
 
 pub async fn run_evidence_listener(
-    staking: Arc<RwLock<StakingKeeper>>,
     ledger: Arc<RwLock<ChainLedger<RedbStore>>>,
+    evidence_pool: Arc<RwLock<crate::evidence_pool::EvidencePool>>,
     mut inbound_evidence_rx: mpsc::Receiver<EquivocationEvidence>,
     is_running: Arc<AtomicBool>,
 ) {
     while is_running.load(Ordering::SeqCst) {
-        match inbound_evidence_rx.recv().await {
-            Some(evidence) => {
-                if !evidence.is_valid_equivocation() {
-                    continue;
-                }
-                let valid_signatures = staking
-                    .read()
-                    .get_validator(&evidence.validator_address)
-                    .is_some_and(|validator| {
-                        evidence
-                            .verify_signatures(&validator.consensus_pubkey)
-                            .is_ok()
-                    });
-                if !valid_signatures {
-                    warn!("rejected forged equivocation evidence");
-                    continue;
-                }
-                match staking.write().slash_equivocation(&evidence) {
-                    Ok(slashed) if !slashed.is_zero() => {
-                        if let Err(e) = ledger
-                            .read()
-                            .apply_slash(&evidence.validator_address, slashed)
-                        {
-                            warn!(validator = %evidence.validator_address, "failed to apply slash to canonical stake: {e}");
-                        }
-                        warn!(
-                            validator = %evidence.validator_address,
-                            %slashed,
-                            "received equivocation evidence from peer: validator slashed"
-                        );
-                    }
-                    Ok(_) => {}
-                    Err(e) => warn!("failed to apply received equivocation evidence: {e}"),
-                }
+        let Some(evidence) = inbound_evidence_rx.recv().await else {
+            break;
+        };
+        // Peer arrival order must never change committed state, power or jail status.
+        let result = evidence_pool
+            .write()
+            .insert(evidence, ledger.read().genesis());
+        match result {
+            Ok(true) => {
+                warn!("peer equivocation observation retained; no canonical state mutation")
             }
-            None => break,
+            Ok(false) => {}
+            Err(e) => warn!("rejected equivocation observation: {e}"),
         }
     }
 }

@@ -165,7 +165,7 @@ impl P2pService {
         }
     }
 
-    /// Broadcasts double-sign evidence so every honest peer can slash the offending validator locally.
+    /// Broadcasts signed double-sign observations without authorizing state changes.
     pub fn broadcast_evidence(&self, evidence: EquivocationEvidence) {
         let peers = self.peers.read();
         let msg = NetworkMessage::Evidence(evidence);

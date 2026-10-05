@@ -13,3 +13,6 @@ pub use chain_id::ChainId;
 pub use error::TypeError;
 pub use hash::Hash32;
 pub use transaction::{KeyType, Transaction, TxBody, TxFee, TxMessage, TxReceipt};
+
+pub mod validator;
+pub use validator::CanonicalValidator;

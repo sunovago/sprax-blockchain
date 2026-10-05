@@ -5,6 +5,11 @@ use std::collections::HashSet;
 
 /// Verifies a unique, same-round, signed >2/3 certificate for this exact block.
 pub fn verify_block_commit(block: &Block, validators: &ValidatorSet) -> Result<(), ConsensusError> {
+    if block.header.validator_set_hash != validators.commitment()? {
+        return Err(ConsensusError::InvalidVote(
+            "commit validator-set commitment mismatch".into(),
+        ));
+    }
     let hash = Hasher::block_hash(&block.header)
         .map_err(|e| ConsensusError::InvalidVote(e.to_string()))?;
     let round = block

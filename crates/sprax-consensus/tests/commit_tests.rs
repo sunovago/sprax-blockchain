@@ -18,6 +18,7 @@ fn fixture() -> (Block, ValidatorSet) {
         last_commit: vec![],
     };
     block.header.height = 1;
+    block.header.validator_set_hash = validators.commitment().unwrap();
     let hash = Hasher::block_hash(&block.header).unwrap();
     for key in keys.iter().take(3) {
         let vote = Vote::new(VoteType::Precommit, 1, 2, Some(hash), key.address(), vec![]);
@@ -106,4 +107,18 @@ fn equivocation_requires_valid_signatures_and_matching_metadata() {
     assert!(evidence.verify_signatures(&key.public_key_bytes()).is_err());
     evidence.validator_address = sprax_types::Address::ZERO;
     assert!(!evidence.is_valid_equivocation());
+}
+
+#[test]
+fn certificate_rejects_the_wrong_validator_commitment_and_priorities_do_not_change_it() {
+    let (block, mut validators) = fixture();
+    let commitment = validators.commitment().unwrap();
+    for _ in 0..12 {
+        validators.select_proposer();
+    }
+    assert_eq!(validators.commitment().unwrap(), commitment);
+    verify_block_commit(&block, &validators).unwrap();
+    let mut bad = block;
+    bad.header.validator_set_hash = Hash32::ZERO;
+    assert!(verify_block_commit(&bad, &validators).is_err());
 }

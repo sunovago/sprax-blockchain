@@ -39,6 +39,7 @@ pub struct NodeService {
     config: NodeConfig,
     ledger: Arc<RwLock<ChainLedger<RedbStore>>>,
     staking: Arc<RwLock<StakingKeeper>>,
+    evidence_pool: Arc<RwLock<crate::evidence_pool::EvidencePool>>,
     keyring: Arc<RwLock<Keyring>>,
     p2p: Arc<RwLock<Option<P2pService>>>,
     rpc_server: Arc<RwLock<Option<crate::rpc_server::RpcServerHandle>>>,
@@ -160,38 +161,35 @@ impl NodeService {
         let ledger = ChainLedger::open_or_init(store, move || Ok(genesis_for_ledger))
             .map_err(|e| NodeError::StorageError(e.to_string()))?;
 
-        let staking_file = data_dir.join("staking.json");
-        let staking = if staking_file.exists() {
-            StakingKeeper::load_from_file(&staking_file)
-                .map_err(|e| NodeError::StorageError(e.to_string()))?
-        } else {
-            let mut keeper = StakingKeeper::default();
-            for v in &genesis.validators {
-                keeper
-                    .register_validator(
-                        v.operator_address,
-                        v.consensus_pubkey.clone(),
-                        ValidatorDescription {
-                            moniker: v.moniker.clone(),
-                            identity: String::new(),
-                            website: String::new(),
-                            details: String::new(),
-                        },
-                        v.self_stake,
-                        CommissionRates::default(),
-                    )
-                    .map_err(|e| NodeError::StorageError(e.to_string()))?;
-            }
-            keeper
-                .save_to_file(&staking_file)
+        // staking.json is an operational cache, never an input to consensus power.
+        // Preserve legacy files, but rebuild the display cache from committed ledger state.
+        let mut staking = StakingKeeper::default();
+        for v in &genesis.validators {
+            staking
+                .register_validator(
+                    v.operator_address,
+                    v.consensus_pubkey.clone(),
+                    ValidatorDescription {
+                        moniker: v.moniker.clone(),
+                        identity: String::new(),
+                        website: String::new(),
+                        details: String::new(),
+                    },
+                    v.self_stake,
+                    CommissionRates::default(),
+                )
                 .map_err(|e| NodeError::StorageError(e.to_string()))?;
-            keeper
-        };
+            let stake = ledger
+                .get_validator_stake(&v.operator_address)
+                .map_err(|e| NodeError::StorageError(e.to_string()))?;
+            staking.sync_validator_tokens(&v.operator_address, stake.tokens);
+        }
 
         Ok(Self {
             config,
             ledger: Arc::new(RwLock::new(ledger)),
             staking: Arc::new(RwLock::new(staking)),
+            evidence_pool: Arc::new(RwLock::new(crate::evidence_pool::EvidencePool::default())),
             keyring: Arc::new(RwLock::new(keyring)),
             p2p: Arc::new(RwLock::new(None)),
             rpc_server: Arc::new(RwLock::new(None)),
@@ -226,6 +224,20 @@ impl NodeService {
     #[must_use]
     pub fn is_syncing(&self) -> bool {
         self.is_syncing.load(Ordering::SeqCst)
+    }
+
+    pub fn observed_evidence_count(&self) -> usize {
+        self.evidence_pool.read().len()
+    }
+
+    pub fn canonical_validator_set(&self) -> Result<sprax_consensus::ValidatorSet, NodeError> {
+        sprax_consensus::ValidatorSet::from_canonical(
+            self.ledger
+                .read()
+                .active_validators()
+                .map_err(|e| NodeError::RuntimeError(e.to_string()))?,
+        )
+        .map_err(|e| NodeError::RuntimeError(e.to_string()))
     }
 
     pub fn keyring(&self) -> Arc<RwLock<Keyring>> {
@@ -391,19 +403,31 @@ impl NodeService {
     }
 
     pub fn apply_block(&self, block: Block) -> Result<Vec<TxReceipt>, NodeError> {
+        let mut guard = self.ledger.write();
+        if block.header.height <= guard.height() {
+            let known = guard
+                .get_block_by_height(block.header.height)
+                .is_some_and(|stored| stored.header == block.header && stored.body == block.body);
+            if known {
+                return Ok(Vec::new());
+            }
+            return Err(NodeError::RuntimeError(
+                "conflicting historical block".into(),
+            ));
+        }
         if self.config.environment != crate::Environment::Development
             || self.config.consensus.enabled
             || !block.last_commit.is_empty()
         {
-            let validators = self
-                .staking
-                .read()
-                .get_active_validator_set()
-                .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
+            let validators = sprax_consensus::ValidatorSet::from_canonical(
+                guard
+                    .active_validators()
+                    .map_err(|e| NodeError::RuntimeError(e.to_string()))?,
+            )
+            .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
             sprax_consensus::verify_block_commit(&block, &validators)
                 .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
         }
-        let mut guard = self.ledger.write();
         let receipts = guard
             .apply_block(block)
             .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
@@ -451,11 +475,7 @@ impl NodeService {
             None
         };
         let initial_val_set = if let Some(key) = &local_validator_key {
-            let validators = self
-                .staking
-                .read()
-                .get_active_validator_set()
-                .map_err(|e| NodeError::ConfigError(format!("cannot start validator: {e}")))?;
+            let validators = self.canonical_validator_set()?;
             if !validators
                 .validators()
                 .iter()
@@ -551,7 +571,6 @@ impl NodeService {
         );
 
         let ledger_clone = Arc::clone(&self.ledger);
-        let staking_for_gossip = Arc::clone(&self.staking);
         let require_commit = self.config.environment != crate::Environment::Development
             || self.config.consensus.enabled;
         let is_running = Arc::clone(&self.is_running);
@@ -565,14 +584,17 @@ impl NodeService {
                         let _ = guard.submit_transaction(tx);
                     }
                     Some(block) = inbound_block_rx.recv() => {
+                        let mut guard = ledger_clone.write();
+                        if block.header.height <= guard.height() { continue; }
                         if require_commit || !block.last_commit.is_empty() {
-                            let validators = staking_for_gossip.read().get_active_validator_set();
+                            let validators = guard.active_validators()
+                                .map_err(|e| e.to_string())
+                                .and_then(|v| sprax_consensus::ValidatorSet::from_canonical(v).map_err(|e| e.to_string()));
                             match validators {
                                 Ok(validators) if sprax_consensus::verify_block_commit(&block, &validators).is_ok() => {}
                                 _ => { warn!("rejected block gossip without a valid quorum certificate"); continue; }
                             }
                         }
-                        let mut guard = ledger_clone.write();
                         let _ = guard.apply_block(block);
                     }
                     else => break,
@@ -581,8 +603,8 @@ impl NodeService {
         });
 
         tokio::spawn(crate::consensus_driver::run_evidence_listener(
-            Arc::clone(&self.staking),
             Arc::clone(&self.ledger),
+            Arc::clone(&self.evidence_pool),
             inbound_evidence_rx,
             Arc::clone(&self.is_running),
         ));
@@ -599,6 +621,7 @@ impl NodeService {
                     Arc::clone(&self.ledger),
                     p2p_service,
                     val_key,
+                    Arc::clone(&self.evidence_pool),
                     signing_journal.ok_or_else(|| {
                         NodeError::RuntimeError("missing validator signing journal".into())
                     })?,

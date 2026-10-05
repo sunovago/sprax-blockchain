@@ -68,6 +68,32 @@ impl ValidatorSet {
         Ok(set)
     }
 
+    pub fn from_canonical(
+        validators: Vec<sprax_types::CanonicalValidator>,
+    ) -> Result<Self, ConsensusError> {
+        Self::new(
+            validators
+                .into_iter()
+                .map(|v| Validator::new(v.address, v.public_key, v.voting_power))
+                .collect(),
+        )
+    }
+
+    pub fn commitment(&self) -> Result<sprax_types::Hash32, ConsensusError> {
+        let validators: Vec<_> = self
+            .validators
+            .iter()
+            .map(|v| sprax_types::CanonicalValidator {
+                address: v.address,
+                public_key: v.public_key.clone(),
+                voting_power: v.voting_power,
+            })
+            .collect();
+        let encoded = serde_json::to_vec(&validators)
+            .map_err(|e| ConsensusError::InvalidValidatorSet(e.to_string()))?;
+        Ok(sprax_crypto::Hasher::sha256(&encoded))
+    }
+
     #[must_use]
     pub fn total_voting_power(&self) -> u64 {
         self.total_voting_power

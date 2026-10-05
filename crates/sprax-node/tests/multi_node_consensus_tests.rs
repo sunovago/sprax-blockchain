@@ -67,14 +67,14 @@ async fn start_observer_node(
 // a non-validating observer, rather than three simultaneously-active `ConsensusDriver`s. With
 // three independently-driven validators, each node's propose-timeout retry count for a given
 // height is tracked locally (see `ConsensusDriver::current_round`, added to stop honest retries
-// from looking like equivocation to observers — see `test_double_sign_triggers_real_slashing`'s
+// from looking like equivocation to observers — see `test_equivocation_gossip_does_not_change_unfinalized_state`'s
 // module docs) — if one validator times out and retries while the others don't, they end up
 // voting at different (height, round) tuples for what is logically the same height, and no
 // single node ever locally observes the +2/3 tally. Making every validator's round advance in
 // lockstep (real Tendermint-style round synchronization, not just "avoid false-positive
 // slashing") is substantial, separable work beyond this milestone's already-documented
 // "no round-skip" limitation — tracked as follow-up alongside Phase 3's real libp2p transport.
-// Two validators plus an observer is exactly the scenario `test_double_sign_triggers_real_slashing`
+// Two validators plus an observer is exactly the scenario `test_equivocation_gossip_does_not_change_unfinalized_state`
 // already proves works reliably end-to-end over the real network, so this test reuses that shape
 // to additionally prove real transaction inclusion + quorum commit signatures.
 #[tokio::test]
@@ -227,23 +227,15 @@ async fn run_three_node_test() {
 }
 
 #[tokio::test]
-async fn test_double_sign_triggers_real_slashing_across_network() {
+async fn test_equivocation_gossip_does_not_change_unfinalized_state() {
     let base_port = 39_700u16;
     let ports = [base_port, base_port + 1];
 
     let temp_dirs: Vec<_> = (0..2).map(|_| tempfile::tempdir().unwrap()).collect();
     let mut services = Vec::new();
 
-    // Alice runs a real `ConsensusDriver` (100k stake — insufficient alone for the 116,667
-    // quorum threshold out of 175k total). Bob is deliberately a non-validating *observer*
-    // (no `ConsensusDriver`): with only Alice actively proposing/voting, no round can ever
-    // reach quorum, so each height's round stays "current" for its full ~4.5s timeout window
-    // instead of advancing near-instantly (as it would with two honest drivers both racing to
-    // finalize) — giving the attacker, below, a realistic window to land forged votes for a
-    // specific height rather than racing a round that finalizes in milliseconds. Bob still
-    // independently runs the equivocation-evidence listener like every node does, so it learns
-    // about the slash purely via gossiped `Evidence`, never by running its own round logic —
-    // that is what proves the *network* path, not just Alice's local detection.
+    // Alice alone cannot reach quorum. Bob observes signed evidence over TCP, but
+    // neither node may change stake, jail status or state root from peer arrival order.
     let alice = start_node(
         temp_dirs[0].path().to_path_buf(),
         ports[0],
@@ -312,78 +304,44 @@ async fn test_double_sign_triggers_real_slashing_across_network() {
     sign_and_broadcast(0xBB);
 
     let original_charlie_tokens = Amount::from_sprx_whole(25_000).unwrap();
-    let expected_slash = Amount::from_sprx_whole(1_250).unwrap(); // 5% of 25,000
-    let expected_remaining = original_charlie_tokens.checked_sub(expected_slash).unwrap();
-
+    let roots: Vec<_> = services
+        .iter()
+        .map(|s| s.latest_header().state_root)
+        .collect();
     let deadline = tokio::time::Instant::now() + Duration::from_secs(15);
-    loop {
-        if tokio::time::Instant::now() >= deadline {
-            let statuses: Vec<_> = services
-                .iter()
-                .map(|s| {
-                    s.staking()
-                        .read()
-                        .get_validator(&charlie_addr)
-                        .map(|v| (v.status, v.is_tombstoned, v.tokens))
-                })
-                .collect();
-            panic!("equivocation evidence did not propagate/slash both nodes within timeout: {statuses:?}");
-        }
-        let both_tombstoned = services.iter().all(|s| {
-            s.staking()
-                .read()
-                .get_validator(&charlie_addr)
-                .map(|v| v.is_tombstoned)
-                .unwrap_or(false)
-        });
-        if both_tombstoned {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(100)).await;
-    }
-
-    for service in &services {
-        let staking = service.staking();
-        let guard = staking.read();
-        let val = guard
-            .get_validator(&charlie_addr)
-            .expect("charlie is a genesis validator");
+    while !services.iter().all(|s| s.observed_evidence_count() == 1) {
         assert!(
-            val.is_tombstoned,
-            "charlie must be tombstoned after equivocation"
+            tokio::time::Instant::now() < deadline,
+            "authenticated observation must propagate to both nodes"
         );
-        assert_eq!(
-            val.status,
-            sprax_consensus::ValidatorStatus::Jailed,
-            "charlie must be jailed after equivocation"
-        );
-        assert_eq!(
-            val.tokens, expected_remaining,
-            "charlie's stake must be reduced by exactly the 5% double-sign slash fraction"
-        );
+        tokio::time::sleep(Duration::from_millis(50)).await;
     }
-
-    // The slash must also land in sprax-core's canonical, transaction-driven stake ledger (not
-    // just StakingKeeper's in-memory BFT cache) — this is what `ConsensusDriver`'s per-height
-    // `sync_stake_from_ledger`/evidence-listener `apply_slash` wiring exists to guarantee.
-    for service in &services {
-        let canonical_stake = service
-            .get_validator_stake(&charlie_addr)
-            .expect("canonical validator stake must be readable");
+    // Repeat evidence cannot become an extra observation or an out-of-block slash.
+    sign_and_broadcast(0xBB);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    for (index, service) in services.iter().enumerate() {
+        assert_eq!(service.observed_evidence_count(), 1);
+        let staking = service.staking();
+        let cached = staking
+            .read()
+            .get_validator(&charlie_addr)
+            .cloned()
+            .unwrap();
+        assert!(!cached.is_tombstoned);
+        assert_eq!(cached.status, sprax_consensus::ValidatorStatus::Active);
+        assert_eq!(cached.tokens, original_charlie_tokens);
         assert_eq!(
-            canonical_stake.tokens, expected_remaining,
-            "canonical ledger stake must reflect the slash, not just StakingKeeper's cache"
+            service.get_validator_stake(&charlie_addr).unwrap().tokens,
+            original_charlie_tokens
         );
-    }
-
-    // Alice alone has 100k of the 150k remaining active voting power after Charlie
-    // is tombstoned. Exactly two-thirds is insufficient: Bob is deliberately not
-    // voting, so proposal construction must not advance finalized height.
-    for service in &services {
+        assert_eq!(service.latest_header().state_root, roots[index]);
+        assert_eq!(service.height(), 0, "no finalized quorum exists");
         assert_eq!(
-            service.height(),
-            0,
-            "a minority/no-quorum proposal must never become finalized"
+            service
+                .canonical_validator_set()
+                .unwrap()
+                .total_voting_power(),
+            175_000
         );
     }
 

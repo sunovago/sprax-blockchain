@@ -320,10 +320,9 @@ impl GenesisConfig {
             state_root,
             txs_root: Hash32::ZERO,
             receipts_root: Hash32::ZERO,
-            validator_set_hash: Hasher::sha256(
-                &serde_json::to_vec(&self.validators)
-                    .map_err(|e| CoreError::StateError(e.to_string()))?,
-            ),
+            validator_set_hash: crate::validator_set::validator_set_hash(
+                &crate::validator_set::canonical_validator_set(self, store)?,
+            )?,
         };
 
         Ok(header)

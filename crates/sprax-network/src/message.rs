@@ -41,7 +41,7 @@ pub enum NetworkMessage {
     Proposal(SignedProposal),
     /// A signed BFT prevote or precommit attestation.
     Vote(Vote),
-    /// Double-sign (equivocation) evidence, gossiped so every honest node can slash locally.
+    /// Double-sign observations; economic effects require finalized evidence processing.
     Evidence(EquivocationEvidence),
 }
 

@@ -252,21 +252,13 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         StateAccessor::get_delegation(&self.store, delegator, validator)
     }
 
-    /// Reduces `validator`'s canonical bonded stake by `slashed_amount` (saturating at zero).
-    /// Called from `sprax-node`'s `ConsensusDriver` right after `StakingKeeper::slash_equivocation`/
-    /// `slash_downtime` slash the in-memory BFT cache, so the canonical, transaction-driven ledger
-    /// (delegate/undelegate) and the BFT validator-set cache never permanently diverge.
-    pub fn apply_slash(
-        &self,
-        validator: &Address,
-        slashed_amount: Amount,
-    ) -> Result<(), CoreError> {
-        let mut stake = StateAccessor::get_validator_stake(&self.store, validator)?;
-        stake.tokens = stake
-            .tokens
-            .checked_sub(slashed_amount)
-            .unwrap_or(Amount::ZERO);
-        StateAccessor::set_validator_stake(&self.store, validator, &stake)
+    /// Derives consensus power solely from committed stake and the genesis registry.
+    pub fn active_validators(&self) -> Result<Vec<sprax_types::CanonicalValidator>, CoreError> {
+        crate::validator_set::canonical_validator_set(&self.genesis, &self.store)
+    }
+
+    pub fn active_validator_set_hash(&self) -> Result<Hash32, CoreError> {
+        crate::validator_set::validator_set_hash(&self.active_validators()?)
     }
 
     /// Submits a signed transaction into the local mempool after pre-validation.
@@ -434,17 +426,15 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
 
     fn mine_block_inner(&mut self, proposer: Address) -> Result<Block, CoreError> {
         let current_height = self.height() + 1;
-        let (parent_hash, parent_timestamp, val_set_hash) = {
+        let (parent_hash, parent_timestamp) = {
             let parent_header = self.latest_header();
             let hash = Hasher::block_hash(parent_header)
                 .map_err(|e| CoreError::StateError(e.to_string()))?;
-            (
-                hash,
-                parent_header.timestamp_unix_secs,
-                parent_header.validator_set_hash,
-            )
+            (hash, parent_header.timestamp_unix_secs)
         };
 
+        // The height H certificate uses the validator set from finalized state H-1.
+        let val_set_hash = self.active_validator_set_hash()?;
         let pending_txs = std::mem::take(&mut self.mempool);
         let mut executed_txs = Vec::with_capacity(pending_txs.len());
         let mut receipts = Vec::with_capacity(pending_txs.len());
@@ -605,6 +595,13 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
             return Err(CoreError::ModuleError {
                 module: "consensus".into(),
                 reason: "block exceeds gas limit".into(),
+            });
+        }
+
+        if block.header.validator_set_hash != self.active_validator_set_hash()? {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "block validator-set commitment mismatch".into(),
             });
         }
 
