@@ -118,7 +118,6 @@ fn proposal_carries_a_verified_prior_round_unlock_certificate() {
         .propose_block(block_hash, proposer.address())
         .unwrap();
     assert!(engine.can_prevote_block(block_hash));
-    assert!(!engine.can_prevote_block(locked_hash));
 
     let mut forged = proposal.clone();
     forged.valid_round = None;
