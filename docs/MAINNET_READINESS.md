@@ -39,7 +39,10 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
   Round numbers cannot regress and retained vote history is bounded to current/locked/valid
   rounds. Restarts account for proposal-only signing history, not only the last signed vote.
 - Consensus locks survive retries at the same height; conflicting proposals receive nil
-  prevotes. Full round synchronization and unlocking/liveness still need work.
+  prevotes unless a later-round signed prevote quorum certifies a replacement block. The
+  signing journal verifies that certificate and durably stores the replacement block and
+  lock before releasing the precommit signature. Full round synchronization and reproposal
+  after restart still need work.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing
   coordinates and precommit lock; conflicting/reversed coordinates are refused. The
   signing database is bound to the genesis and validator public key. A durable marker
@@ -47,7 +50,8 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
 - Proposals carry validator signatures bound to the genesis, chain ID, height, round and
   block-header hash. The selected proposer is checked; invalid signatures are ignored
   while waiting for a valid proposal. Proposal signatures are also durably journaled,
-  with conflicting retries and regressions refused. This does not implement BFT unlocking.
+  with conflicting retries and regressions refused. Replacing a BFT lock requires a later
+  signed prevote quorum certificate and durable replacement state.
 - Existing chain state is bound to the exact genesis fingerprint. Changed or missing
   fingerprints fail closed. Genesis self-stake is deducted from the operator allocation
   and credited to a self-delegation; unfunded or duplicate validators are rejected.
@@ -107,8 +111,9 @@ does not clear the repository's open findings or establish independent audit cle
 
 The latest proposer schedule is a protocol change: validator operators must coordinate the
 upgrade; mixed old/new binaries can choose different proposers. Existing mainnet readiness
-remains incomplete pending consensus unlocking/liveness, finalized canonical slashing, broader
-fault and recovery testing, audit/remediation, and launch operations.
+remains incomplete pending full consensus round synchronization and reproposal after restart,
+finalized canonical slashing, broader fault and recovery testing, audit/remediation, and launch
+operations.
 
 Rust regression tests were added for rejected block rollback, proposal isolation, repeated
 unbond failure, unsupported message rejection, nonzero-round commit verification, certificate
@@ -157,8 +162,8 @@ verify the chain changes above or a live deployment.
    rollback are verified. Complete chain query/submessage/migration capabilities, contract events,
    compilation caching, and execution performance testing. Bounded iteration is implemented;
    pagination beyond the configured scan limits remains a future capability.
-3. Complete BFT round synchronization and locked proposal handling,
-   safe unlocking/reproposal after restart, commit validation during historical catch-up,
+3. Complete BFT round synchronization and locked proposal handling, reproposal after restart,
+   commit validation during historical catch-up,
    and complete validator registration/jail/tombstone transitions and canonical slashing.
    Delegation-driven power commitments and sequential certificate catch-up are implemented;
    peer observations are quarantined and have no economic effect.
