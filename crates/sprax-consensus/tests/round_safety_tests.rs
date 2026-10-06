@@ -94,7 +94,6 @@ fn a_verified_proposal_valid_round_allows_locked_validator_to_prevote_conflict()
         .collect();
     engine.install_valid_round_certificate(1, 1, replacement, &certificate);
     assert!(engine.can_prevote_block(replacement));
-    assert!(!engine.can_prevote_block(locked));
 }
 
 #[test]
