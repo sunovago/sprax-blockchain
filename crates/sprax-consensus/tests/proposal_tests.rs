@@ -108,6 +108,18 @@ fn proposal_carries_a_verified_prior_round_unlock_certificate() {
         .verify(genesis, proposer.address(), &validators)
         .unwrap();
 
+    let mut engine = sprax_consensus::BftConsensusEngine::new(9, validators.clone());
+    let locked_hash = Hash32::new([54; 32]);
+    engine.restore_lock(9, 0, locked_hash);
+    engine.set_round(1);
+    assert!(!engine.can_prevote_block(block_hash));
+    engine.install_valid_round_certificate(9, 0, block_hash, &proposal.valid_round_votes);
+    engine
+        .propose_block(block_hash, proposer.address())
+        .unwrap();
+    assert!(engine.can_prevote_block(block_hash));
+    assert!(!engine.can_prevote_block(locked_hash));
+
     let mut forged = proposal.clone();
     forged.valid_round = None;
     assert!(forged
