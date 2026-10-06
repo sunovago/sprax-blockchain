@@ -50,7 +50,13 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
   signing a conflicting prevote. Such a prevote preserves the old lock across reopen; only
   a durably signed non-nil precommit replaces it. Driver tests cover both initially locked
   and unlocked validators participating in certified-round finalization.
-  These tests do not yet cover TCP partitions, missed proposals or multi-node restart/catch-up.
+  Authenticated, ledger-valid proposals that arrive before their round are retained for
+  the current height: at most eight rounds, a 32-round lookahead and 8 MiB of serialized
+  proposal data. Cached proposals do not advance rounds or create locks; they are checked
+  again on consumption. Driver tests finalize from an early cached proposal even after
+  its inbound channel closes, with both locked and unlocked validators. Proposals never
+  received at all still need a peer request/retransmission mechanism. TCP partition and
+  multi-node restart/catch-up tests remain outstanding.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing
   coordinates and precommit lock; conflicting/reversed coordinates are refused. The
   signing database is bound to the genesis and validator public key. A durable marker

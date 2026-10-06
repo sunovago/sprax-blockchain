@@ -40,6 +40,7 @@ pub struct ConsensusDriver {
     current_round: u32,
     pending_round: Option<u32>,
     future_prevote_rounds: BTreeMap<u32, BTreeMap<Address, Vote>>,
+    future_proposals: BTreeMap<u32, (SignedProposal, usize)>,
     pending_valid_round_certificate: Option<(u32, Hash32, Vec<Vote>)>,
     min_peers_before_start: usize,
 }
@@ -128,6 +129,7 @@ impl ConsensusDriver {
             current_round,
             pending_round: None,
             future_prevote_rounds: BTreeMap::new(),
+            future_proposals: BTreeMap::new(),
             pending_valid_round_certificate: None,
             min_peers_before_start,
         })
@@ -196,6 +198,7 @@ impl ConsensusDriver {
             self.current_round = 0;
             self.pending_round = None;
             self.future_prevote_rounds.clear();
+            self.future_proposals.clear();
             self.pending_valid_round_certificate = None;
             0
         };
@@ -212,6 +215,8 @@ impl ConsensusDriver {
         self.engine.set_validator_set(val_set);
         self.engine.start_height(next_height);
         self.engine.set_round(round);
+        self.future_proposals
+            .retain(|proposal_round, _| *proposal_round >= round);
         if let Some((valid_round, block_hash, votes)) = self.pending_valid_round_certificate.take()
         {
             if valid_round <= round {
@@ -427,6 +432,15 @@ impl ConsensusDriver {
         let deadline = Instant::now() + Duration::from_millis(self.timeouts.timeout_propose_ms);
         let genesis = self.ledger.read().genesis().fingerprint().ok()?;
         let received = loop {
+            if let Some((proposal, _)) = self.future_proposals.remove(&round) {
+                if proposal.block.header.height == height
+                    && proposal
+                        .verify(genesis, expected_proposer, self.engine.validator_set())
+                        .is_ok()
+                {
+                    break Some(proposal);
+                }
+            }
             let remaining = deadline.saturating_duration_since(Instant::now());
             if remaining.is_zero() {
                 break None;
@@ -443,7 +457,7 @@ impl ConsensusDriver {
                     }
                     break Some(proposal);
                 }
-                Ok(Some(_stale_or_future)) => continue,
+                Ok(Some(proposal)) => self.cache_future_proposal(proposal),
                 _ => break None,
             }
         };
@@ -482,6 +496,63 @@ impl ConsensusDriver {
                 None
             }
         }
+    }
+
+    fn cache_future_proposal(&mut self, proposal: SignedProposal) {
+        const MAX_ROUNDS: usize = 8;
+        const MAX_ROUND_GAP: u32 = 32;
+        const MAX_SERIALIZED_BYTES: usize = 8 * 1024 * 1024;
+        if proposal.block.header.height != self.engine.current_height()
+            || proposal.round <= self.current_round
+            || proposal.round - self.current_round > MAX_ROUND_GAP
+            || self.future_proposals.contains_key(&proposal.round)
+            || self.future_proposals.len() >= MAX_ROUNDS
+        {
+            return;
+        }
+        // Count serialized bytes without allocating a second copy of the block.
+        struct Budget(usize);
+        impl std::io::Write for Budget {
+            fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+                self.0 = self
+                    .0
+                    .checked_sub(bytes.len())
+                    .ok_or_else(|| std::io::Error::other("future proposal cache byte limit"))?;
+                Ok(bytes.len())
+            }
+            fn flush(&mut self) -> std::io::Result<()> {
+                Ok(())
+            }
+        }
+        let used: usize = self.future_proposals.values().map(|(_, bytes)| bytes).sum();
+        let available = MAX_SERIALIZED_BYTES.saturating_sub(used);
+        let mut budget = Budget(available);
+        if serde_json::to_writer(&mut budget, &proposal).is_err() {
+            return;
+        }
+        let Ok(genesis) = self.ledger.read().genesis().fingerprint() else {
+            return;
+        };
+        let Ok(proposer) =
+            self.engine
+                .select_proposer(genesis, proposal.block.header.height, proposal.round)
+        else {
+            return;
+        };
+        if proposal
+            .verify(genesis, proposer.address, self.engine.validator_set())
+            .is_err()
+            || self
+                .ledger
+                .read()
+                .validate_proposal(proposal.block.clone())
+                .is_err()
+        {
+            return;
+        }
+        // An early proposal never advances the round or establishes a signing lock.
+        self.future_proposals
+            .insert(proposal.round, (proposal, available - budget.0));
     }
 
     async fn cast_nil_prevote(&mut self, height: u64, round: u32) {
@@ -833,6 +904,7 @@ impl ConsensusDriver {
             return;
         }
         self.pending_block = None;
+        self.future_proposals.clear();
         info!(height, "block finalized with +2/3 precommit quorum");
         self.sync_stake_from_ledger();
         // Defensive re-broadcast: peers that missed the Proposal message still converge via
@@ -1312,6 +1384,15 @@ mod tests {
             let (proposal_tx, proposal_rx) = mpsc::channel(8);
             proposal_tx.send(proposal).await.unwrap();
             driver.inbound_proposal_rx = proposal_rx;
+            drop(proposal_tx);
+            let current_proposer = driver.engine.select_proposer(identity, 1, 1).unwrap();
+            assert_eq!(
+                driver.await_proposal(1, 1, current_proposer.address).await,
+                None
+            );
+            assert!(driver.future_proposals.contains_key(&round));
+            assert_eq!(driver.pending_round, None);
+            assert_eq!(driver.ledger.read().height(), 0);
             let (vote_tx, vote_rx) = mpsc::channel(8);
             driver.inbound_vote_rx = vote_rx;
             for key in keys.iter().skip(1) {
@@ -1336,6 +1417,7 @@ mod tests {
             assert_eq!(state.locked_block, Some(hash));
             assert_eq!(driver.ledger.read().height(), 1);
             assert!(driver.future_prevote_rounds.is_empty());
+            assert!(driver.future_proposals.is_empty());
         }
     }
 
@@ -1392,6 +1474,77 @@ mod tests {
         assert!(driver.future_prevote_rounds.is_empty());
         driver.observe_future_prevote(signed_prevote(&keys[1], identity, 10, None));
         assert!(driver.future_prevote_rounds.contains_key(&10));
+    }
+
+    #[tokio::test]
+    async fn future_proposal_cache_rejects_invalid_messages_and_reclaims_round_slots() {
+        let (_dir, keys, identity, mut driver) = round_sync_fixture();
+        driver.last_attempted_height = 1;
+        driver.current_round = 1;
+        driver.engine.set_round(1);
+        let make_proposal = |driver: &ConsensusDriver, round| {
+            let proposer = driver.engine.select_proposer(identity, 1, round).unwrap();
+            let key = keys
+                .iter()
+                .find(|key| key.address() == proposer.address)
+                .unwrap();
+            let mut proposal = SignedProposal {
+                genesis: identity,
+                signer: proposer.address,
+                round,
+                valid_round: None,
+                valid_round_votes: Vec::new(),
+                block: driver
+                    .ledger
+                    .read()
+                    .build_proposal(proposer.address)
+                    .unwrap(),
+                signature: Vec::new(),
+            };
+            proposal.signature = key.sign(&proposal.sign_bytes().unwrap());
+            proposal
+        };
+        let valid = make_proposal(&driver, 2);
+        let mut forged = valid.clone();
+        forged.signature[0] ^= 1;
+        driver.cache_future_proposal(forged);
+        let mut invalid_block = valid.clone();
+        invalid_block.block.header.state_root = Hash32::ZERO;
+        let key = keys
+            .iter()
+            .find(|key| key.address() == invalid_block.signer)
+            .unwrap();
+        invalid_block.signature = key.sign(&invalid_block.sign_bytes().unwrap());
+        driver.cache_future_proposal(invalid_block);
+        let mut wrong_proposer = valid.clone();
+        let outsider = keys
+            .iter()
+            .find(|key| key.address() != valid.signer)
+            .unwrap();
+        wrong_proposer.signer = outsider.address();
+        wrong_proposer.signature = outsider.sign(&wrong_proposer.sign_bytes().unwrap());
+        driver.cache_future_proposal(wrong_proposer);
+        driver.cache_future_proposal(make_proposal(&driver, 34));
+        assert!(driver.future_proposals.is_empty());
+
+        for round in 2..=10 {
+            let proposal = make_proposal(&driver, round);
+            driver.cache_future_proposal(proposal);
+        }
+        assert_eq!(driver.future_proposals.len(), 8);
+        assert!(!driver.future_proposals.contains_key(&10));
+        assert_eq!(driver.pending_round, None);
+        assert_eq!(driver.ledger.read().height(), 0);
+        assert!(driver.signing_journal.state().unwrap().is_none());
+
+        driver.current_round = 9;
+        driver.inbound_vote_rx.close();
+        driver.inbound_proposal_rx.close();
+        driver.run_one_height().await;
+        assert!(driver.future_proposals.is_empty());
+        let proposal = make_proposal(&driver, 11);
+        driver.cache_future_proposal(proposal);
+        assert!(driver.future_proposals.contains_key(&11));
     }
 
     #[tokio::test]
