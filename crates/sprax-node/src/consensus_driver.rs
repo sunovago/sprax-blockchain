@@ -304,9 +304,15 @@ impl ConsensusDriver {
             .engine
             .can_prevote_block(block_hash)
             .then_some(block_hash);
-        if let Ok(vote) =
-            self.build_signed_vote(VoteType::Prevote, next_height, round, prevote_hash, None)
-        {
+        let unlock_proof =
+            prevote_hash.and_then(|hash| self.certified_unlock_proof(next_height, hash));
+        if let Ok(vote) = self.build_signed_vote(
+            VoteType::Prevote,
+            next_height,
+            round,
+            prevote_hash,
+            unlock_proof.as_deref(),
+        ) {
             self.broadcast_and_feed_vote(vote).await;
             if self.maybe_cast_reactive_precommit(next_height, round).await {
                 return;
@@ -723,25 +729,7 @@ impl ConsensusDriver {
                 })
             })
             .filter(|hash| self.engine.can_record_precommit_lock(height, round, *hash));
-        let unlock_proof = validated.and_then(|hash| {
-            self.engine
-                .locked_block()
-                .filter(|locked| *locked != hash)
-                .and_then(|_| {
-                    self.engine
-                        .valid_round()
-                        .filter(|valid_round| {
-                            self.engine
-                                .locked_round()
-                                .is_some_and(|locked_round| *valid_round > locked_round)
-                                && self.engine.valid_block() == Some(hash)
-                        })
-                        .map(|valid_round| {
-                            self.engine
-                                .prevote_quorum_certificate(height, valid_round, hash)
-                        })
-                })
-        });
+        let unlock_proof = validated.and_then(|hash| self.certified_unlock_proof(height, hash));
         let vote = match self.build_signed_vote(
             VoteType::Precommit,
             height,
@@ -760,6 +748,26 @@ impl ConsensusDriver {
         }
         self.precommitted_this_round = true;
         self.broadcast_and_feed_vote(vote).await
+    }
+
+    fn certified_unlock_proof(&self, height: u64, hash: Hash32) -> Option<Vec<Vote>> {
+        self.engine
+            .locked_block()
+            .filter(|locked| *locked != hash)
+            .and_then(|_| {
+                self.engine
+                    .valid_round()
+                    .filter(|valid_round| {
+                        self.engine
+                            .locked_round()
+                            .is_some_and(|locked_round| *valid_round > locked_round)
+                            && self.engine.valid_block() == Some(hash)
+                    })
+                    .map(|valid_round| {
+                        self.engine
+                            .prevote_quorum_certificate(height, valid_round, hash)
+                    })
+            })
     }
 
     async fn cast_nil_precommit(&mut self, height: u64, round: u32) -> bool {
@@ -885,7 +893,9 @@ impl ConsensusDriver {
             self.local_key.address(),
             vec![],
         );
-        let block = if vote_type == VoteType::Precommit && block_hash.is_some() {
+        let block = if block_hash.is_some()
+            && (vote_type == VoteType::Precommit || unlock_proof.is_some())
+        {
             self.pending_block.clone()
         } else {
             None
@@ -1238,61 +1248,95 @@ mod tests {
 
     #[tokio::test]
     async fn joining_certified_round_replays_votes_and_finalizes_validated_proposal() {
-        let (_dir, keys, identity, mut driver) = round_sync_fixture();
-        driver.last_attempted_height = 1;
-        driver.current_round = 1;
-        driver.engine.set_round(1);
-        let (round, proposer) = (2..32)
-            .map(|round| {
-                (
-                    round,
-                    driver.engine.select_proposer(identity, 1, round).unwrap(),
-                )
-            })
-            .find(|(_, proposer)| proposer.address != driver.local_key.address())
-            .unwrap();
-        let block = driver
-            .ledger
-            .read()
-            .build_proposal(proposer.address)
-            .unwrap();
-        let hash = Hasher::block_hash(&block.header).unwrap();
-        let proposer_key = keys
-            .iter()
-            .find(|key| key.address() == proposer.address)
-            .unwrap();
-        let mut proposal = SignedProposal {
-            genesis: identity,
-            signer: proposer.address,
-            round,
-            valid_round: None,
-            valid_round_votes: Vec::new(),
-            block,
-            signature: Vec::new(),
-        };
-        proposal.signature = proposer_key.sign(&proposal.sign_bytes().unwrap());
-        let (proposal_tx, proposal_rx) = mpsc::channel(8);
-        proposal_tx.send(proposal).await.unwrap();
-        driver.inbound_proposal_rx = proposal_rx;
-        let (vote_tx, vote_rx) = mpsc::channel(8);
-        driver.inbound_vote_rx = vote_rx;
-        for key in keys.iter().skip(1) {
-            driver.observe_future_prevote(signed_prevote(key, identity, round, Some(hash)));
-            let mut precommit = signed_prevote(key, identity, round, Some(hash));
-            precommit.vote_type = VoteType::Precommit;
-            precommit.signature = key.sign(&precommit.sign_bytes().unwrap());
-            vote_tx.send(precommit).await.unwrap();
+        for initially_locked in [false, true] {
+            let (_dir, keys, identity, mut driver) = round_sync_fixture();
+            driver.last_attempted_height = 1;
+            driver.current_round = 1;
+            driver.engine.set_round(1);
+            if initially_locked {
+                let locked_block = driver
+                    .ledger
+                    .read()
+                    .build_proposal(driver.local_key.address())
+                    .unwrap();
+                let locked_hash = Hasher::block_hash(&locked_block.header).unwrap();
+                driver
+                    .signing_journal
+                    .sign_with_block(
+                        Vote::new(
+                            identity,
+                            VoteType::Precommit,
+                            1,
+                            1,
+                            Some(locked_hash),
+                            driver.local_key.address(),
+                            Vec::new(),
+                        ),
+                        &driver.local_key,
+                        Some(locked_block.clone()),
+                        None,
+                    )
+                    .unwrap();
+                driver.engine.restore_lock(1, 1, locked_hash);
+                driver.pending_block = Some(locked_block);
+            }
+            let (round, proposer) = (2..32)
+                .map(|round| {
+                    (
+                        round,
+                        driver.engine.select_proposer(identity, 1, round).unwrap(),
+                    )
+                })
+                .find(|(_, proposer)| proposer.address != driver.local_key.address())
+                .unwrap();
+            let block = driver
+                .ledger
+                .read()
+                .build_proposal(proposer.address)
+                .unwrap();
+            let hash = Hasher::block_hash(&block.header).unwrap();
+            let proposer_key = keys
+                .iter()
+                .find(|key| key.address() == proposer.address)
+                .unwrap();
+            let mut proposal = SignedProposal {
+                genesis: identity,
+                signer: proposer.address,
+                round,
+                valid_round: None,
+                valid_round_votes: Vec::new(),
+                block,
+                signature: Vec::new(),
+            };
+            proposal.signature = proposer_key.sign(&proposal.sign_bytes().unwrap());
+            let (proposal_tx, proposal_rx) = mpsc::channel(8);
+            proposal_tx.send(proposal).await.unwrap();
+            driver.inbound_proposal_rx = proposal_rx;
+            let (vote_tx, vote_rx) = mpsc::channel(8);
+            driver.inbound_vote_rx = vote_rx;
+            for key in keys.iter().skip(1) {
+                driver.observe_future_prevote(signed_prevote(key, identity, round, Some(hash)));
+                let mut precommit = signed_prevote(key, identity, round, Some(hash));
+                precommit.vote_type = VoteType::Precommit;
+                precommit.signature = key.sign(&precommit.sign_bytes().unwrap());
+                vote_tx.send(precommit).await.unwrap();
+            }
+            driver.run_one_height().await;
+            assert_eq!(driver.current_round, round);
+            assert_eq!(driver.engine.valid_round(), Some(round));
+            assert_eq!(driver.engine.valid_block(), Some(hash));
+            assert!(driver
+                .engine
+                .prevote_quorum_certificate(1, round, hash)
+                .iter()
+                .any(|vote| vote.validator_address == driver.local_key.address()));
+            let state = driver.signing_journal.state().unwrap().unwrap();
+            assert_eq!(state.vote.vote_type, VoteType::Precommit);
+            assert_eq!(state.vote.round, round);
+            assert_eq!(state.locked_block, Some(hash));
+            assert_eq!(driver.ledger.read().height(), 1);
+            assert!(driver.future_prevote_rounds.is_empty());
         }
-        driver.run_one_height().await;
-        assert_eq!(driver.current_round, round);
-        assert_eq!(driver.engine.valid_round(), Some(round));
-        assert_eq!(driver.engine.valid_block(), Some(hash));
-        let state = driver.signing_journal.state().unwrap().unwrap();
-        assert_eq!(state.vote.vote_type, VoteType::Precommit);
-        assert_eq!(state.vote.round, round);
-        assert_eq!(state.locked_block, Some(hash));
-        assert_eq!(driver.ledger.read().height(), 1);
-        assert!(driver.future_prevote_rounds.is_empty());
     }
 
     #[tokio::test]

@@ -206,19 +206,21 @@ impl SigningJournal {
         block: Option<Block>,
         unlock_proof: Option<(&ValidatorSet, &[Vote])>,
     ) -> Result<Vote, String> {
-        if vote.vote_type == VoteType::Precommit && vote.block_hash.is_some() {
-            let data = block
-                .as_ref()
-                .ok_or("non-nil precommit requires complete validated block")?;
+        if vote.block_hash.is_some()
+            && (vote.vote_type == VoteType::Precommit || unlock_proof.is_some())
+        {
+            let data = block.as_ref().ok_or(
+                "non-nil precommit or certified prevote requires complete validated block",
+            )?;
             if data.header.height != vote.height
                 || Some(sprax_crypto::Hasher::block_hash(&data.header).map_err(|e| e.to_string())?)
                     != vote.block_hash
                 || !data.last_commit.is_empty()
             {
-                return Err("precommit block does not match vote or contains a certificate".into());
+                return Err("candidate block does not match vote or contains a certificate".into());
             }
         } else if block.is_some() {
-            return Err("block cache is only accepted with a non-nil precommit".into());
+            return Err("block data requires a non-nil precommit or certified prevote".into());
         }
         if vote.genesis != self.genesis
             || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
@@ -258,6 +260,7 @@ impl SigningJournal {
             let mut locked_block = None;
             let mut locked_round = None;
             let mut locked_block_data = None;
+            let mut proof_verified = false;
             if let Some(previous) = previous {
                 if step(&vote) < step(&previous.vote) {
                     return Err("refusing signing state regression".into());
@@ -280,7 +283,7 @@ impl SigningJournal {
                         && vote.block_hash.is_some()
                         && locked_block != vote.block_hash
                     {
-                        if vote.vote_type != VoteType::Precommit || block.is_none() {
+                        if block.is_none() {
                             return Err(
                                 "refusing vote conflicting with durable consensus lock".into()
                             );
@@ -289,9 +292,8 @@ impl SigningJournal {
                         if vote.round <= locked_round {
                             return Err("unlock proof must come from a later round".into());
                         }
-                        let (validators, proof) = unlock_proof.ok_or(
-                            "conflicting precommit requires a signed prevote quorum proof",
-                        )?;
+                        let (validators, proof) = unlock_proof
+                            .ok_or("conflicting vote requires a signed prevote quorum proof")?;
                         let proof_round = proof
                             .first()
                             .map(|prevote| prevote.round)
@@ -316,11 +318,17 @@ impl SigningJournal {
                             vote.block_hash.expect("checked as nonnil above"),
                         )
                         .map_err(|e| e.to_string())?;
+                        proof_verified = true;
                     } else if unlock_proof.is_some() {
                         return Err("unlock proof supplied when no lock conflict exists".into());
                     }
                 }
             }
+            if unlock_proof.is_some() && !proof_verified {
+                return Err("unlock proof supplied when no lock conflict exists".into());
+            }
+            // A certified prevote keeps the old durable lock until the replacement
+            // precommit is signed. Restarting after the prevote must restore that lock.
             if vote.vote_type == VoteType::Precommit && vote.block_hash.is_some() {
                 locked_block = vote.block_hash;
                 locked_round = Some(vote.round);

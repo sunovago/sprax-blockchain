@@ -349,6 +349,44 @@ fn durable_lock_changes_only_with_later_signed_prevote_quorum() {
             vote
         },
     ];
+    let replacement_prevote = vote(signer, 7, 2, VoteType::Prevote, Some(candidate_hash));
+    let before = journal.state().unwrap().unwrap();
+    assert!(journal.sign(replacement_prevote.clone(), signer).is_err());
+    assert!(journal
+        .sign_with_block(
+            replacement_prevote.clone(),
+            signer,
+            Some(candidate.clone()),
+            Some((&validators, &insufficient)),
+        )
+        .is_err());
+    let mut forged = certificate.clone();
+    forged[0].signature[0] ^= 1;
+    assert!(journal
+        .sign_with_block(
+            replacement_prevote.clone(),
+            signer,
+            Some(candidate.clone()),
+            Some((&validators, &forged)),
+        )
+        .is_err());
+    assert_eq!(journal.state().unwrap().unwrap().vote, before.vote);
+    journal
+        .sign_with_block(
+            replacement_prevote,
+            signer,
+            Some(candidate.clone()),
+            Some((&validators, &certificate)),
+        )
+        .unwrap();
+    drop(journal);
+    let journal = SigningJournal::open(&path, genesis, signer).unwrap();
+    let after_prevote = journal.state().unwrap().unwrap();
+    assert_eq!(after_prevote.vote.vote_type, VoteType::Prevote);
+    assert_eq!(after_prevote.vote.block_hash, Some(candidate_hash));
+    assert_eq!(after_prevote.locked_block, before.locked_block);
+    assert_eq!(after_prevote.locked_round, before.locked_round);
+    assert_eq!(after_prevote.locked_block_data, before.locked_block_data);
     journal
         .sign_with_block(
             vote(signer, 7, 2, VoteType::Precommit, Some(candidate_hash)),

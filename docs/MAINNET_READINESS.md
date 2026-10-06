@@ -46,6 +46,10 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
   block hash or nil. On entry, same-round certificates and buffered prevotes (including nil)
   are replayed before local voting, and expired round buffers are removed. Four-validator
   signed-message driver tests cover jump-to-finalization and lock-preserving nil transitions.
+  The signing journal also verifies the replacement block and later-round quorum before
+  signing a conflicting prevote. Such a prevote preserves the old lock across reopen; only
+  a durably signed non-nil precommit replaces it. Driver tests cover both initially locked
+  and unlocked validators participating in certified-round finalization.
   These tests do not yet cover TCP partitions, missed proposals or multi-node restart/catch-up.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing
   coordinates and precommit lock; conflicting/reversed coordinates are refused. The
