@@ -194,11 +194,19 @@ impl ConsensusDriver {
                 return;
             }
         };
+        let reusable_valid_block = (next_height == self.engine.current_height())
+            .then(|| self.engine.valid_block())
+            .flatten();
+        let reusable_pending_block = reusable_valid_block.and_then(|valid_hash| {
+            self.pending_block
+                .take()
+                .filter(|block| Hasher::block_hash(&block.header).ok() == Some(valid_hash))
+        });
         self.engine.set_validator_set(val_set);
         self.engine.start_height(next_height);
         self.engine.set_round(round);
         self.precommitted_this_round = false;
-        self.pending_block = if self.engine.locked_block().is_some() {
+        let durable_locked_block = if self.engine.locked_block().is_some() {
             self.signing_journal
                 .state()
                 .ok()
@@ -208,6 +216,17 @@ impl ConsensusDriver {
         } else {
             None
         };
+        self.pending_block = reusable_pending_block
+            .filter(|block| {
+                let block_hash = Hasher::block_hash(&block.header).ok();
+                block_hash == self.engine.valid_block()
+                    && self.engine.valid_round().is_some_and(|valid_round| {
+                        self.engine
+                            .locked_round()
+                            .is_none_or(|locked_round| valid_round > locked_round)
+                    })
+            })
+            .or(durable_locked_block);
 
         let genesis = match self.ledger.read().genesis().fingerprint() {
             Ok(genesis) => genesis,
@@ -248,10 +267,10 @@ impl ConsensusDriver {
             return;
         };
 
-        let prevote_hash = match self.engine.locked_block() {
-            Some(locked) if locked != block_hash => None,
-            _ => Some(block_hash),
-        };
+        let prevote_hash = self
+            .engine
+            .can_prevote_block(block_hash)
+            .then_some(block_hash);
         if let Ok(vote) =
             self.build_signed_vote(VoteType::Prevote, next_height, round, prevote_hash, None)
         {
@@ -270,7 +289,28 @@ impl ConsensusDriver {
         round: u32,
         proposer_addr: Address,
     ) -> Option<Hash32> {
-        let built = if self.engine.locked_block().is_some() {
+        let certified_cached = self.engine.valid_round().and_then(|valid_round| {
+            (valid_round < round)
+                .then(|| self.engine.valid_block())
+                .flatten()
+                .and_then(|hash| {
+                    self.pending_block
+                        .as_ref()
+                        .filter(|block| Hasher::block_hash(&block.header).ok() == Some(hash))
+                        .filter(|_| {
+                            self.engine
+                                .locked_round()
+                                .is_none_or(|locked_round| valid_round > locked_round)
+                        })
+                        .cloned()
+                })
+        });
+        let built = if let Some(cached) = certified_cached {
+            self.ledger
+                .read()
+                .validate_proposal(cached.clone())
+                .map(|_| cached)
+        } else if self.engine.locked_block().is_some() {
             let cached = self.pending_block.clone()?;
             if Hasher::block_hash(&cached.header).ok() != self.engine.locked_block() {
                 return None;
@@ -298,17 +338,31 @@ impl ConsensusDriver {
         };
         self.pending_block = Some(mined.clone());
         let genesis = self.ledger.read().genesis().fingerprint().ok()?;
+        let valid_round = self
+            .engine
+            .valid_round()
+            .filter(|valid_round| *valid_round < round)
+            .filter(|_| self.engine.valid_block() == Some(block_hash));
+        let valid_round_votes = valid_round
+            .map(|valid_round| {
+                self.engine
+                    .prevote_quorum_certificate(height, valid_round, block_hash)
+            })
+            .unwrap_or_default();
         let proposal = SignedProposal {
             genesis,
             signer: proposer_addr,
             round,
+            valid_round,
+            valid_round_votes,
             block: mined,
             signature: Vec::new(),
         };
-        let signed = match self
-            .signing_journal
-            .sign_proposal(proposal, &self.local_key)
-        {
+        let signed = match self.signing_journal.sign_proposal(
+            proposal,
+            &self.local_key,
+            self.engine.validator_set(),
+        ) {
             Ok(signed) => signed,
             Err(error) => {
                 warn!(height, round, "proposal signing refused: {error}");
@@ -348,22 +402,31 @@ impl ConsensusDriver {
                         warn!(height, round, "ignoring unauthenticated proposal: {error}");
                         continue;
                     }
-                    break Some(proposal.block);
+                    break Some(proposal);
                 }
                 Ok(Some(_stale_or_future)) => continue,
                 _ => break None,
             }
         };
 
-        let Some(block) = received else {
+        let Some(proposal) = received else {
             warn!(height, round, "propose timeout / no proposal received");
             return None;
         };
+        let block = proposal.block;
 
         let apply_result = self.ledger.read().validate_proposal(block.clone());
         match apply_result {
             Ok(_) => match Hasher::block_hash(&block.header) {
                 Ok(bh) => {
+                    if let Some(valid_round) = proposal.valid_round {
+                        self.engine.install_valid_round_certificate(
+                            height,
+                            valid_round,
+                            bh,
+                            &proposal.valid_round_votes,
+                        );
+                    }
                     if self.engine.propose_block(bh, expected_proposer).is_err() {
                         return None;
                     }
@@ -761,10 +824,13 @@ mod tests {
                     genesis: identity,
                     signer: key.address(),
                     round: 7,
+                    valid_round: None,
+                    valid_round_votes: Vec::new(),
                     block: ledger.build_proposal(key.address()).unwrap(),
                     signature: vec![],
                 },
                 &key,
+                &validators,
             )
             .unwrap();
         assert!(journal.state().unwrap().is_none());

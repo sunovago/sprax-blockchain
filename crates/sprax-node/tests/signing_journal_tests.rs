@@ -1,5 +1,5 @@
 use sprax_consensus::SignedProposal;
-use sprax_consensus::{Vote, VoteType};
+use sprax_consensus::{Validator, ValidatorSet, Vote, VoteType};
 use sprax_types::{Block, BlockBody, BlockHeader};
 
 #[test]
@@ -8,6 +8,12 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
     let path = dir.path().join("proposal-signing.redb");
     let signer = Ed25519Keypair::generate();
     let genesis = Hash32::new([61; 32]);
+    let validators = ValidatorSet::new(vec![Validator::new(
+        signer.address(),
+        signer.public_key_bytes().to_vec(),
+        1,
+    )])
+    .unwrap();
     let mut header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([62; 32]));
     header.proposer = signer.address();
     header.height = 1;
@@ -16,6 +22,8 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
         genesis,
         signer: signer.address(),
         round: 2,
+        valid_round: None,
+        valid_round_votes: Vec::new(),
         block: Block {
             header,
             body: BlockBody::default(),
@@ -24,23 +32,31 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
         signature: Vec::new(),
     };
     let journal = SigningJournal::open(&path, genesis, &signer).unwrap();
-    let signed = journal.sign_proposal(proposal.clone(), &signer).unwrap();
+    let signed = journal
+        .sign_proposal(proposal.clone(), &signer, &validators)
+        .unwrap();
     drop(journal);
     let reopened = SigningJournal::open(&path, genesis, &signer).unwrap();
     assert_eq!(
-        reopened.sign_proposal(proposal.clone(), &signer).unwrap(),
+        reopened
+            .sign_proposal(proposal.clone(), &signer, &validators)
+            .unwrap(),
         signed
     );
     let mut conflict = proposal.clone();
     conflict.block.header.state_root = Hash32::ZERO;
-    assert!(reopened.sign_proposal(conflict, &signer).is_err());
+    assert!(reopened
+        .sign_proposal(conflict, &signer, &validators)
+        .is_err());
     let mut old = proposal.clone();
     old.round = 1;
     assert_eq!(reopened.latest_proposal().unwrap().unwrap().round, 2);
-    assert!(reopened.sign_proposal(old, &signer).is_err());
+    assert!(reopened.sign_proposal(old, &signer, &validators).is_err());
     let mut wrong_genesis = proposal;
     wrong_genesis.genesis = Hash32::ZERO;
-    assert!(reopened.sign_proposal(wrong_genesis, &signer).is_err());
+    assert!(reopened
+        .sign_proposal(wrong_genesis, &signer, &validators)
+        .is_err());
     let old_vote = Vote::new(
         genesis,
         VoteType::Prevote,
@@ -61,6 +77,97 @@ fn proposal_signatures_survive_restarts_and_conflicting_retries_are_refused() {
         Vec::new(),
     );
     reopened.sign(current_vote, &signer).unwrap();
+}
+
+#[test]
+fn durable_lock_allows_only_a_certified_conflicting_proposal() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("locked-proposal.redb");
+    let keys: Vec<_> = (111..=114)
+        .map(|seed| Ed25519Keypair::from_seed(&[seed; 32]))
+        .collect();
+    let validators = ValidatorSet::new(
+        keys.iter()
+            .map(|key| Validator::new(key.address(), key.public_key_bytes().to_vec(), 1))
+            .collect(),
+    )
+    .unwrap();
+    let genesis = Hash32::new([11; 32]);
+    let signer = &keys[0];
+    let journal = SigningJournal::open(&path, genesis, signer).unwrap();
+
+    let mut locked_header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([21; 32]));
+    locked_header.height = 4;
+    locked_header.parent_hash = Hash32::new([22; 32]);
+    locked_header.proposer = signer.address();
+    locked_header.validator_set_hash = validators.commitment().unwrap();
+    let locked_block = Block {
+        header: locked_header,
+        body: BlockBody::default(),
+        last_commit: vec![],
+    };
+    let locked_hash = Hasher::block_hash(&locked_block.header).unwrap();
+    journal
+        .sign_with_block(
+            vote(signer, 4, 0, VoteType::Precommit, Some(locked_hash)),
+            signer,
+            Some(locked_block),
+            None,
+        )
+        .unwrap();
+
+    let mut candidate_header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([23; 32]));
+    candidate_header.height = 4;
+    candidate_header.parent_hash = Hash32::new([22; 32]);
+    candidate_header.proposer = signer.address();
+    candidate_header.validator_set_hash = validators.commitment().unwrap();
+    let candidate = Block {
+        header: candidate_header,
+        body: BlockBody::default(),
+        last_commit: vec![],
+    };
+    let candidate_hash = Hasher::block_hash(&candidate.header).unwrap();
+    let bare_proposal = SignedProposal {
+        genesis,
+        signer: signer.address(),
+        round: 2,
+        valid_round: None,
+        valid_round_votes: vec![],
+        block: candidate.clone(),
+        signature: vec![],
+    };
+    assert!(journal
+        .sign_proposal(bare_proposal, signer, &validators)
+        .is_err());
+
+    let votes: Vec<_> = keys[1..]
+        .iter()
+        .map(|key| {
+            let mut vote = vote(key, 4, 1, VoteType::Prevote, Some(candidate_hash));
+            vote.signature = key.sign(&vote.sign_bytes().unwrap());
+            vote
+        })
+        .collect();
+    let proposal = SignedProposal {
+        genesis,
+        signer: signer.address(),
+        round: 2,
+        valid_round: Some(1),
+        valid_round_votes: votes,
+        block: candidate,
+        signature: vec![],
+    };
+    let signed = journal
+        .sign_proposal(proposal, signer, &validators)
+        .unwrap();
+    signed
+        .verify(genesis, signer.address(), &validators)
+        .unwrap();
+    assert_eq!(journal.latest_proposal().unwrap(), Some(signed));
+    assert_eq!(
+        journal.state().unwrap().unwrap().locked_block,
+        Some(locked_hash)
+    );
 }
 use sprax_crypto::{Ed25519Keypair, Hasher};
 use sprax_node::signing_journal::SigningJournal;

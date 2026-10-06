@@ -1,4 +1,4 @@
-use crate::{ConsensusError, ValidatorSet};
+use crate::{ConsensusError, ValidatorSet, Vote};
 use serde::{Deserialize, Serialize};
 use sprax_crypto::{Ed25519Keypair, Hasher};
 use sprax_types::{Address, Block, Hash32};
@@ -8,6 +8,8 @@ pub struct SignedProposal {
     pub genesis: Hash32,
     pub signer: Address,
     pub round: u32,
+    pub valid_round: Option<u32>,
+    pub valid_round_votes: Vec<Vote>,
     pub block: Block,
     pub signature: Vec<u8>,
 }
@@ -22,15 +24,17 @@ impl SignedProposal {
             chain_id: &'a str,
             height: u64,
             round: u32,
+            valid_round: Option<u32>,
             block_hash: Hash32,
         }
         let bytes = Signable {
-            domain: "sprax/proposal/v2",
+            domain: "sprax/proposal/v3",
             genesis: self.genesis,
             signer: self.signer,
             chain_id: &self.block.header.chain_id,
             height: self.block.header.height,
             round: self.round,
+            valid_round: self.valid_round,
             block_hash: Hasher::block_hash(&self.block.header)
                 .map_err(|e| ConsensusError::InvalidProposer(e.to_string()))?,
         };
@@ -64,6 +68,39 @@ impl SignedProposal {
             .find(|validator| validator.address == expected_proposer)
             .ok_or_else(|| ConsensusError::InvalidProposer("unknown proposer".into()))?;
         Ed25519Keypair::verify(&validator.public_key, &self.sign_bytes()?, &self.signature)
-            .map_err(|e| ConsensusError::InvalidProposer(e.to_string()))
+            .map_err(|e| ConsensusError::InvalidProposer(e.to_string()))?;
+        self.verify_valid_round(validators)
+    }
+
+    /// Validate the optional prior-round prevote quorum that permits locked validators
+    /// to consider this proposal. The proposal signature binds the certified round and
+    /// block hash; each certificate member carries its own vote signature.
+    pub fn verify_valid_round(&self, validators: &ValidatorSet) -> Result<(), ConsensusError> {
+        match self.valid_round {
+            None if self.valid_round_votes.is_empty() => Ok(()),
+            None => Err(ConsensusError::InvalidProposer(
+                "prevote certificate provided without a valid round".into(),
+            )),
+            Some(round) if round >= self.round => Err(ConsensusError::InvalidProposer(
+                "proposal valid round must precede proposal round".into(),
+            )),
+            Some(round) => {
+                if self.block.header.validator_set_hash != validators.commitment()? {
+                    return Err(ConsensusError::InvalidProposer(
+                        "proposal validator-set commitment mismatch".into(),
+                    ));
+                }
+                let hash = Hasher::block_hash(&self.block.header)
+                    .map_err(|e| ConsensusError::InvalidProposer(e.to_string()))?;
+                crate::verify_prevote_quorum(
+                    &self.valid_round_votes,
+                    validators,
+                    self.genesis,
+                    self.block.header.height,
+                    round,
+                    hash,
+                )
+            }
+        }
     }
 }

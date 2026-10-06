@@ -121,6 +121,7 @@ impl SigningJournal {
         &self,
         mut proposal: SignedProposal,
         signer: &Ed25519Keypair,
+        validators: &ValidatorSet,
     ) -> Result<SignedProposal, String> {
         if proposal.genesis != self.genesis
             || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
@@ -128,6 +129,9 @@ impl SigningJournal {
         {
             return Err("proposal signer or genesis does not match journal identity".into());
         }
+        proposal
+            .verify_valid_round(validators)
+            .map_err(|error| error.to_string())?;
         let write = self.db.begin_write().map_err(|e| e.to_string())?;
         {
             let mut table = write.open_table(TABLE).map_err(|e| e.to_string())?;
@@ -168,7 +172,13 @@ impl SigningJournal {
                                 .map_err(|e| e.to_string())?,
                         )
                 {
-                    return Err("proposal conflicts with durable lock".into());
+                    let locked_round = state.locked_round.ok_or("durable lock has no round")?;
+                    if !proposal
+                        .valid_round
+                        .is_some_and(|valid_round| valid_round > locked_round)
+                    {
+                        return Err("proposal conflicts with durable lock".into());
+                    }
                 }
             }
             proposal.signature = signer.sign(&proposal.sign_bytes().map_err(|e| e.to_string())?);

@@ -61,6 +61,53 @@ impl BftConsensusEngine {
         }
     }
 
+    /// Install a valid-round certificate already verified by `SignedProposal::verify`.
+    /// It allows a validator with an older conflicting lock to prevote the certified block.
+    pub fn install_valid_round_certificate(
+        &mut self,
+        height: u64,
+        round: u32,
+        block: Hash32,
+        votes: &[Vote],
+    ) {
+        if height != self.state.height {
+            return;
+        }
+        if self.state.valid_round.is_some_and(|valid_round| {
+            round < valid_round || (round == valid_round && self.state.valid_block != Some(block))
+        }) {
+            return;
+        }
+        for vote in votes {
+            self.prevotes
+                .entry((height, round, vote.validator_address))
+                .or_insert_with(|| vote.clone());
+        }
+        if self
+            .state
+            .valid_round
+            .is_none_or(|valid_round| round > valid_round)
+        {
+            self.state.valid_round = Some(round);
+            self.state.valid_block = Some(block);
+        }
+    }
+
+    #[must_use]
+    pub fn can_prevote_block(&self, block: Hash32) -> bool {
+        match (self.state.locked_round, self.state.locked_block) {
+            (None, None) => true,
+            (Some(_), Some(locked)) if locked == block => true,
+            (Some(locked_round), Some(_)) => {
+                self.state
+                    .valid_round
+                    .is_some_and(|valid_round| valid_round > locked_round)
+                    && self.state.valid_block == Some(block)
+            }
+            _ => false,
+        }
+    }
+
     #[must_use]
     pub fn valid_round(&self) -> Option<u32> {
         self.state.valid_round

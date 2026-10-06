@@ -1,4 +1,4 @@
-use sprax_consensus::{SignedProposal, Validator, ValidatorSet};
+use sprax_consensus::{SignedProposal, Validator, ValidatorSet, Vote, VoteType};
 use sprax_crypto::Ed25519Keypair;
 use sprax_types::{Block, BlockBody, BlockHeader, Hash32};
 
@@ -21,6 +21,8 @@ fn proposal_authentication_binds_genesis_round_height_and_header() {
         genesis,
         signer: signer.address(),
         round: 3,
+        valid_round: None,
+        valid_round_votes: Vec::new(),
         block: Block {
             header,
             body: BlockBody::default(),
@@ -50,4 +52,75 @@ fn proposal_authentication_binds_genesis_round_height_and_header() {
             .verify(genesis, signer.address(), &validators)
             .is_err());
     }
+}
+
+#[test]
+fn proposal_carries_a_verified_prior_round_unlock_certificate() {
+    let keys: Vec<_> = (71..=74)
+        .map(|seed| Ed25519Keypair::from_seed(&[seed; 32]))
+        .collect();
+    let validators = ValidatorSet::new(
+        keys.iter()
+            .map(|key| Validator::new(key.address(), key.public_key_bytes().to_vec(), 1))
+            .collect(),
+    )
+    .unwrap();
+    let genesis = Hash32::new([51; 32]);
+    let proposer = &keys[0];
+    let mut header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([52; 32]));
+    header.height = 9;
+    header.parent_hash = Hash32::new([53; 32]);
+    header.proposer = proposer.address();
+    header.validator_set_hash = validators.commitment().unwrap();
+    let block = Block {
+        header,
+        body: BlockBody::default(),
+        last_commit: vec![],
+    };
+    let block_hash = sprax_crypto::Hasher::block_hash(&block.header).unwrap();
+    let valid_round_votes: Vec<_> = keys[1..]
+        .iter()
+        .map(|key| {
+            let mut vote = Vote::new(
+                genesis,
+                VoteType::Prevote,
+                9,
+                0,
+                Some(block_hash),
+                key.address(),
+                vec![],
+            );
+            vote.signature = key.sign(&vote.sign_bytes().unwrap());
+            vote
+        })
+        .collect();
+    let mut proposal = SignedProposal {
+        genesis,
+        signer: proposer.address(),
+        round: 1,
+        valid_round: Some(0),
+        valid_round_votes,
+        block,
+        signature: vec![],
+    };
+    proposal.signature = proposer.sign(&proposal.sign_bytes().unwrap());
+    proposal
+        .verify(genesis, proposer.address(), &validators)
+        .unwrap();
+
+    let mut forged = proposal.clone();
+    forged.valid_round = None;
+    assert!(forged
+        .verify(genesis, proposer.address(), &validators)
+        .is_err());
+    let mut forged = proposal.clone();
+    forged.valid_round_votes[0].signature[0] ^= 1;
+    assert!(forged
+        .verify(genesis, proposer.address(), &validators)
+        .is_err());
+    let mut forged = proposal;
+    forged.valid_round = Some(1);
+    assert!(forged
+        .verify(genesis, proposer.address(), &validators)
+        .is_err());
 }

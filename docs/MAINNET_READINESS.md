@@ -49,9 +49,11 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
   rejects accidental journal deletion. Restoring old backups of both files is not protected.
 - Proposals carry validator signatures bound to the genesis, chain ID, height, round and
   block-header hash. The selected proposer is checked; invalid signatures are ignored
-  while waiting for a valid proposal. Proposal signatures are also durably journaled,
-  with conflicting retries and regressions refused. Replacing a BFT lock requires a later
-  signed prevote quorum certificate and durable replacement state.
+  while waiting for a valid proposal. Proposal v3 can carry a prior-round signed prevote
+  quorum for the exact block, allowing validators with older locks to safely prevote it.
+  Proposal signatures are durably journaled, and a conflicting proposal is accepted only
+  with that later-round proof. Replacing a BFT lock still requires the later-round quorum
+  and durable replacement state.
 - Existing chain state is bound to the exact genesis fingerprint. Changed or missing
   fingerprints fail closed. Genesis self-stake is deducted from the operator allocation
   and credited to a self-delegation; unfunded or duplicate validators are rejected.
@@ -191,10 +193,11 @@ Passing local tests or producing configuration files alone does not close these 
 
 ## Upgrade compatibility
 
-Vote signing version 2 replaces the old unbound encoding. Mixed-version consensus, old
-commit certificates and legacy signing journals are incompatible. Never delete or reset an
-existing signing journal to bypass this rejection. A fresh coordinated network with new
-operator keys or a separately reviewed migration is required; automatic migration is absent.
+Vote signing version 2 and proposal signing version 3 replace the older encodings. Mixed-version
+consensus, old commit certificates and legacy signing journals are incompatible. Never delete
+or reset an existing signing journal to bypass this rejection. A fresh coordinated network
+with new operator keys or a separately reviewed migration is required; automatic migration is
+absent.
 
 The canonical validator commitment encoding replaces the historical genesis-validator JSON
 hash and the copied-parent header placeholder. Restart rejects an old genesis commitment,

@@ -69,6 +69,34 @@ fn a_later_round_quorum_certificate_allows_safe_lock_replacement() {
     engine.set_round(0);
     assert_eq!(engine.current_round(), 1);
 }
+
+#[test]
+fn a_verified_proposal_valid_round_allows_locked_validator_to_prevote_conflict() {
+    let mut engine = engine();
+    let locked = Hash32::new([17; 32]);
+    engine.propose_block(locked, Address::new([1; 20])).unwrap();
+    for i in 1..=3 {
+        engine
+            .receive_prevote(vote(VoteType::Prevote, 0, Some(locked), i))
+            .unwrap();
+    }
+    engine.record_precommit_lock(1, 0, locked).unwrap();
+
+    let replacement = Hash32::new([18; 32]);
+    engine.set_round(2);
+    engine
+        .propose_block(replacement, Address::new([2; 20]))
+        .unwrap();
+    assert!(!engine.can_prevote_block(replacement));
+
+    let certificate: Vec<_> = (1..=3)
+        .map(|i| vote(VoteType::Prevote, 1, Some(replacement), i))
+        .collect();
+    engine.install_valid_round_certificate(1, 1, replacement, &certificate);
+    assert!(engine.can_prevote_block(replacement));
+    assert!(!engine.can_prevote_block(locked));
+}
+
 #[test]
 fn nil_precommits_finish_a_round_without_finalizing_a_block() {
     let mut engine = engine();
