@@ -1,6 +1,6 @@
 # Mainnet readiness
 
-Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 complete",
+Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 complete",
 "genesis ready", and "cleared for mainnet" claims.
 
 ## Current hardening changes
@@ -97,6 +97,18 @@ Updated: 2026-10-05. Status: INCOMPLETE. This file supersedes historical "12/12 
   rejected. Fresh non-development keyrings do not seed development private keys.
 
 ## Verification
+
+Latest hardening checkpoint: revision `2b577db59d961f16809aa35726616333536cf9d6`.
+[Rust/WASM, strict Clippy and four frontend/SDK checks](https://github.com/sunovago/sprax-blockchain/actions/runs/37354635688),
+[Protocol CI, including Docker builds](https://github.com/sunovago/sprax-blockchain/actions/runs/37354635876),
+and [all four CodeQL language analyses](https://github.com/sunovago/sprax-blockchain/actions/runs/37354635672)
+completed successfully. The suite reported 143 passing Rust tests. CodeQL workflow success
+does not clear the repository's open findings or establish independent audit clearance.
+
+The latest proposer schedule is a protocol change: validator operators must coordinate the
+upgrade; mixed old/new binaries can choose different proposers. Existing mainnet readiness
+remains incomplete pending consensus unlocking/liveness, finalized canonical slashing, broader
+fault and recovery testing, audit/remediation, and launch operations.
 
 Rust regression tests were added for rejected block rollback, proposal isolation, repeated
 unbond failure, unsupported message rejection, nonzero-round commit verification, certificate
