@@ -122,6 +122,7 @@ fn durable_signer_replays_identical_votes_and_refuses_conflicts_after_reopen() {
             vote(&key, 7, 2, VoteType::Precommit, Some(block)),
             &key,
             Some(block_data.clone()),
+            None,
         )
         .unwrap();
     drop(journal);
@@ -139,6 +140,7 @@ fn durable_signer_replays_identical_votes_and_refuses_conflicts_after_reopen() {
             vote(&key, 7, 3, VoteType::Precommit, Some(conflicting_hash)),
             &key,
             Some(conflicting_block),
+            None,
         )
         .is_err());
     journal
@@ -156,6 +158,102 @@ fn durable_signer_replays_identical_votes_and_refuses_conflicts_after_reopen() {
     assert!(SigningJournal::open(&path, identity, &Ed25519Keypair::generate()).is_err());
     std::fs::remove_file(&path).unwrap();
     assert!(SigningJournal::open(&path, identity, &key).is_err());
+}
+
+#[test]
+fn durable_lock_changes_only_with_later_signed_prevote_quorum() {
+    use sprax_consensus::{Validator, ValidatorSet};
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("unlock.redb");
+    let keys: Vec<_> = (101..=104)
+        .map(|seed| Ed25519Keypair::from_seed(&[seed; 32]))
+        .collect();
+    let validators = ValidatorSet::new(
+        keys.iter()
+            .map(|key| Validator::new(key.address(), key.public_key_bytes().to_vec(), 1))
+            .collect(),
+    )
+    .unwrap();
+    let genesis = Hash32::new([11; 32]);
+    let signer = &keys[0];
+    let journal = SigningJournal::open(&path, genesis, signer).unwrap();
+    let mut old_header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([16; 32]));
+    old_header.height = 7;
+    old_header.parent_hash = Hash32::new([15; 32]);
+    old_header.validator_set_hash = validators.commitment().unwrap();
+    let old_block = Block {
+        header: old_header,
+        body: BlockBody::default(),
+        last_commit: vec![],
+    };
+    let old_hash = Hasher::block_hash(&old_block.header).unwrap();
+    journal
+        .sign_with_block(
+            vote(signer, 7, 0, VoteType::Precommit, Some(old_hash)),
+            signer,
+            Some(old_block),
+            None,
+        )
+        .unwrap();
+
+    let mut candidate_header = BlockHeader::genesis("sprax-testnet-1", Hash32::new([17; 32]));
+    candidate_header.height = 7;
+    candidate_header.parent_hash = Hash32::new([15; 32]);
+    candidate_header.validator_set_hash = validators.commitment().unwrap();
+    let candidate = Block {
+        header: candidate_header,
+        body: BlockBody::default(),
+        last_commit: vec![],
+    };
+    let candidate_hash = Hasher::block_hash(&candidate.header).unwrap();
+    let sign_prevote = |key: &Ed25519Keypair| {
+        let mut proof_vote = vote(key, 7, 1, VoteType::Prevote, Some(candidate_hash));
+        proof_vote.signature = key.sign(&proof_vote.sign_bytes().unwrap());
+        proof_vote
+    };
+    let insufficient = [sign_prevote(&keys[1]), sign_prevote(&keys[2])];
+    assert!(journal
+        .sign_with_block(
+            vote(signer, 7, 1, VoteType::Precommit, Some(candidate_hash)),
+            signer,
+            Some(candidate.clone()),
+            Some((&validators, &insufficient)),
+        )
+        .is_err());
+    assert_eq!(
+        journal.state().unwrap().unwrap().locked_block,
+        Some(old_hash)
+    );
+
+    let certificate = [
+        {
+            let mut vote = vote(&keys[1], 7, 1, VoteType::Prevote, Some(candidate_hash));
+            vote.signature = keys[1].sign(&vote.sign_bytes().unwrap());
+            vote
+        },
+        {
+            let mut vote = vote(&keys[2], 7, 1, VoteType::Prevote, Some(candidate_hash));
+            vote.signature = keys[2].sign(&vote.sign_bytes().unwrap());
+            vote
+        },
+        {
+            let mut vote = vote(&keys[3], 7, 1, VoteType::Prevote, Some(candidate_hash));
+            vote.signature = keys[3].sign(&vote.sign_bytes().unwrap());
+            vote
+        },
+    ];
+    journal
+        .sign_with_block(
+            vote(signer, 7, 2, VoteType::Precommit, Some(candidate_hash)),
+            signer,
+            Some(candidate.clone()),
+            Some((&validators, &certificate)),
+        )
+        .unwrap();
+    let recovered = journal.state().unwrap().unwrap();
+    assert_eq!(recovered.locked_block, Some(candidate_hash));
+    assert_eq!(recovered.locked_round, Some(2));
+    assert_eq!(recovered.locked_block_data, Some(candidate));
 }
 
 #[test]

@@ -71,3 +71,59 @@ pub fn verify_block_commit(
     }
     Ok(())
 }
+
+/// Verifies the +2/3 signed prevote proof required to replace a durable lock with a
+/// different block. The caller must also validate that the candidate block commits
+/// this validator set before asking the signing journal to accept the unlock.
+pub fn verify_prevote_quorum(
+    votes: &[Vote],
+    validators: &ValidatorSet,
+    genesis: Hash32,
+    height: u64,
+    round: u32,
+    block_hash: Hash32,
+) -> Result<(), ConsensusError> {
+    if votes.len() > validators.len() {
+        return Err(ConsensusError::InvalidVote(
+            "prevote certificate exceeds active validator count".into(),
+        ));
+    }
+    let mut seen = HashSet::new();
+    let mut power = 0u64;
+    for vote in votes {
+        if vote.genesis != genesis
+            || vote.vote_type != VoteType::Prevote
+            || vote.height != height
+            || vote.round != round
+            || vote.block_hash != Some(block_hash)
+            || vote.signature.len() != 64
+            || !seen.insert(vote.validator_address)
+        {
+            return Err(ConsensusError::InvalidVote(
+                "invalid prevote certificate member".into(),
+            ));
+        }
+        let validator = validators
+            .validators()
+            .iter()
+            .find(|validator| validator.address == vote.validator_address)
+            .ok_or_else(|| ConsensusError::InvalidVote("unknown prevote signer".into()))?;
+        sprax_crypto::Ed25519Keypair::verify(
+            &validator.public_key,
+            &vote.sign_bytes()?,
+            &vote.signature,
+        )
+        .map_err(|error| {
+            ConsensusError::InvalidVote(format!("invalid prevote signature: {error}"))
+        })?;
+        power = power
+            .checked_add(validator.voting_power)
+            .ok_or_else(|| ConsensusError::InvalidVote("prevote power overflow".into()))?;
+    }
+    if !validators.has_quorum(power) {
+        return Err(ConsensusError::InvalidVote(
+            "insufficient signed prevote power to unlock".into(),
+        ));
+    }
+    Ok(())
+}

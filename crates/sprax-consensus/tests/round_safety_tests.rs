@@ -38,7 +38,7 @@ fn quorum_for_unknown_data_does_not_create_a_lock() {
     assert!(engine.record_precommit_lock(1, 0, hash).is_err());
 }
 #[test]
-fn a_conflicting_round_cannot_replace_a_precommit_lock_without_unlock_proof() {
+fn a_later_round_quorum_certificate_allows_safe_lock_replacement() {
     let mut engine = engine();
     let original = Hash32::new([7; 32]);
     engine
@@ -62,8 +62,10 @@ fn a_conflicting_round_cannot_replace_a_precommit_lock_without_unlock_proof() {
             .unwrap();
     }
     assert_eq!(engine.locked_block(), Some(original));
-    assert!(engine.record_precommit_lock(1, 1, conflicting).is_err());
-    assert_eq!(engine.locked_round(), Some(0));
+    assert!(engine.can_record_precommit_lock(1, 1, conflicting));
+    engine.record_precommit_lock(1, 1, conflicting).unwrap();
+    assert_eq!(engine.locked_block(), Some(conflicting));
+    assert_eq!(engine.locked_round(), Some(1));
     engine.set_round(0);
     assert_eq!(engine.current_round(), 1);
 }

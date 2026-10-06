@@ -1,7 +1,7 @@
 //! Persist votes before releasing signatures. Keep this database with validator keys.
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
-use sprax_consensus::{SignedProposal, Vote, VoteType};
+use sprax_consensus::{SignedProposal, ValidatorSet, Vote, VoteType};
 use sprax_crypto::Ed25519Keypair;
 use sprax_types::{Block, Hash32};
 use std::{io::Write, path::Path, sync::Arc};
@@ -184,7 +184,7 @@ impl SigningJournal {
     /// Database write transactions serialize competing callers; a signature is returned
     /// only after its record is durable. Identical retries return the persisted signature.
     pub fn sign(&self, vote: Vote, signer: &Ed25519Keypair) -> Result<Vote, String> {
-        self.sign_with_block(vote, signer, None)
+        self.sign_with_block(vote, signer, None, None)
     }
 
     /// The caller must validate execution first. A non-nil precommit atomically
@@ -194,6 +194,7 @@ impl SigningJournal {
         mut vote: Vote,
         signer: &Ed25519Keypair,
         block: Option<Block>,
+        unlock_proof: Option<(&ValidatorSet, &[Vote])>,
     ) -> Result<Vote, String> {
         if vote.vote_type == VoteType::Precommit && vote.block_hash.is_some() {
             let data = block
@@ -269,7 +270,44 @@ impl SigningJournal {
                         && vote.block_hash.is_some()
                         && locked_block != vote.block_hash
                     {
-                        return Err("refusing vote conflicting with durable consensus lock".into());
+                        if vote.vote_type != VoteType::Precommit || block.is_none() {
+                            return Err(
+                                "refusing vote conflicting with durable consensus lock".into()
+                            );
+                        }
+                        let locked_round = locked_round.ok_or("durable lock has no round")?;
+                        if vote.round <= locked_round {
+                            return Err("unlock proof must come from a later round".into());
+                        }
+                        let (validators, proof) = unlock_proof.ok_or(
+                            "conflicting precommit requires a signed prevote quorum proof",
+                        )?;
+                        let proof_round = proof
+                            .first()
+                            .map(|prevote| prevote.round)
+                            .ok_or("unlock proof must contain a signed prevote quorum")?;
+                        if proof_round <= locked_round || proof_round > vote.round {
+                            return Err("unlock proof must be from a later, reached round".into());
+                        }
+                        let candidate = block.as_ref().expect("checked above");
+                        if candidate.header.validator_set_hash
+                            != validators.commitment().map_err(|e| e.to_string())?
+                        {
+                            return Err(
+                                "unlock proof validator set does not match candidate block".into(),
+                            );
+                        }
+                        sprax_consensus::verify_prevote_quorum(
+                            proof,
+                            validators,
+                            self.genesis,
+                            vote.height,
+                            proof_round,
+                            vote.block_hash.expect("checked as nonnil above"),
+                        )
+                        .map_err(|e| e.to_string())?;
+                    } else if unlock_proof.is_some() {
+                        return Err("unlock proof supplied when no lock conflict exists".into());
                     }
                 }
             }

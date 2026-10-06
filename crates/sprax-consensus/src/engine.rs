@@ -229,12 +229,7 @@ impl BftConsensusEngine {
         round: u32,
         hash: Hash32,
     ) -> Result<(), ConsensusError> {
-        if height != self.state.height
-            || round != self.state.round
-            || self.proposed_blocks.get(&(height, round)) != Some(&hash)
-            || self.get_prevoted_block_with_quorum(height, round) != Some(hash)
-            || self.state.locked_block.is_some_and(|locked| locked != hash)
-        {
+        if !self.can_record_precommit_lock(height, round, hash) {
             return Err(ConsensusError::InvalidVote(
                 "cannot lock unvalidated, conflicting or nonquorum proposal".into(),
             ));
@@ -242,6 +237,41 @@ impl BftConsensusEngine {
         self.state.locked_round = Some(round);
         self.state.locked_block = Some(hash);
         Ok(())
+    }
+
+    #[must_use]
+    pub fn can_record_precommit_lock(&self, height: u64, round: u32, hash: Hash32) -> bool {
+        if height != self.state.height
+            || round != self.state.round
+            || self.proposed_blocks.get(&(height, round)) != Some(&hash)
+            || self.get_prevoted_block_with_quorum(height, round) != Some(hash)
+        {
+            return false;
+        }
+        match (self.state.locked_round, self.state.locked_block) {
+            (None, None) => true,
+            (Some(_), Some(locked)) if locked == hash => true,
+            (Some(locked_round), Some(_)) => {
+                self.state
+                    .valid_round
+                    .is_some_and(|valid_round| valid_round > locked_round)
+                    && self.state.valid_block == Some(hash)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn prevote_quorum_certificate(&self, height: u64, round: u32, hash: Hash32) -> Vec<Vote> {
+        let mut votes: Vec<_> = self
+            .prevotes
+            .iter()
+            .filter(|((vote_height, vote_round, _), vote)| {
+                *vote_height == height && *vote_round == round && vote.block_hash == Some(hash)
+            })
+            .map(|(_, vote)| vote.clone())
+            .collect();
+        votes.sort_by_key(|vote| vote.validator_address);
+        votes
     }
 
     pub fn has_nil_precommit_quorum(&self, height: u64, round: u32) -> bool {

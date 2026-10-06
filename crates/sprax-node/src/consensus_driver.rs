@@ -92,7 +92,7 @@ impl ConsensusDriver {
                     _ => {
                         return Err(ConsensusError::InvalidVote(
                             "incomplete durable lock data".into(),
-                        ))
+                        ));
                     }
                 }
             }
@@ -253,7 +253,7 @@ impl ConsensusDriver {
             _ => Some(block_hash),
         };
         if let Ok(vote) =
-            self.build_signed_vote(VoteType::Prevote, next_height, round, prevote_hash)
+            self.build_signed_vote(VoteType::Prevote, next_height, round, prevote_hash, None)
         {
             self.broadcast_and_feed_vote(vote).await;
             if self.maybe_cast_reactive_precommit(next_height, round).await {
@@ -383,7 +383,7 @@ impl ConsensusDriver {
     }
 
     async fn cast_nil_prevote(&mut self, height: u64, round: u32) {
-        if let Ok(vote) = self.build_signed_vote(VoteType::Prevote, height, round, None) {
+        if let Ok(vote) = self.build_signed_vote(VoteType::Prevote, height, round, None, None) {
             self.broadcast_and_feed_vote(vote).await;
         }
     }
@@ -519,12 +519,33 @@ impl ConsensusDriver {
                         && Hasher::block_hash(&block.header).ok() == Some(*hash)
                 })
             })
-            .filter(|hash| {
-                self.engine
-                    .locked_block()
-                    .is_none_or(|locked| locked == *hash)
-            });
-        let vote = match self.build_signed_vote(VoteType::Precommit, height, round, validated) {
+            .filter(|hash| self.engine.can_record_precommit_lock(height, round, *hash));
+        let unlock_proof = validated.and_then(|hash| {
+            self.engine
+                .locked_block()
+                .filter(|locked| *locked != hash)
+                .and_then(|_| {
+                    self.engine
+                        .valid_round()
+                        .filter(|valid_round| {
+                            self.engine
+                                .locked_round()
+                                .is_some_and(|locked_round| *valid_round > locked_round)
+                                && self.engine.valid_block() == Some(hash)
+                        })
+                        .map(|valid_round| {
+                            self.engine
+                                .prevote_quorum_certificate(height, valid_round, hash)
+                        })
+                })
+        });
+        let vote = match self.build_signed_vote(
+            VoteType::Precommit,
+            height,
+            round,
+            validated,
+            unlock_proof.as_deref(),
+        ) {
             Ok(v) => v,
             Err(_) => return false,
         };
@@ -542,7 +563,8 @@ impl ConsensusDriver {
         if self.precommitted_this_round {
             return false;
         }
-        let Ok(vote) = self.build_signed_vote(VoteType::Precommit, height, round, None) else {
+        let Ok(vote) = self.build_signed_vote(VoteType::Precommit, height, round, None, None)
+        else {
             return false;
         };
         self.precommitted_this_round = true;
@@ -643,6 +665,7 @@ impl ConsensusDriver {
         height: u64,
         round: u32,
         block_hash: Option<Hash32>,
+        unlock_proof: Option<&[Vote]>,
     ) -> Result<Vote, ConsensusError> {
         let genesis = self
             .ledger
@@ -665,7 +688,12 @@ impl ConsensusDriver {
             None
         };
         self.signing_journal
-            .sign_with_block(vote, &self.local_key, block)
+            .sign_with_block(
+                vote,
+                &self.local_key,
+                block,
+                unlock_proof.map(|proof| (self.engine.validator_set(), proof)),
+            )
             .map_err(|error| {
                 warn!(height, round, "validator signing refused: {error}");
                 ConsensusError::InvalidVote(error)
