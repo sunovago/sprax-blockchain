@@ -43,8 +43,10 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
   signing journal verifies that certificate and durably stores the replacement block and
   lock before releasing the precommit signature. The driver now bounds future-round vote
   retention and jumps to a later round only after authenticated +2/3 prevotes agree on one
-  block hash or nil; a non-nil certificate is installed as valid-round evidence. Multi-validator
-  round-transition, reproposal and catch-up testing still need work.
+  block hash or nil. On entry, same-round certificates and buffered prevotes (including nil)
+  are replayed before local voting, and expired round buffers are removed. Four-validator
+  signed-message driver tests cover jump-to-finalization and lock-preserving nil transitions.
+  These tests do not yet cover TCP partitions, missed proposals or multi-node restart/catch-up.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing
   coordinates and precommit lock; conflicting/reversed coordinates are refused. The
   signing database is bound to the genesis and validator public key. A durable marker
@@ -166,7 +168,7 @@ verify the chain changes above or a live deployment.
    rollback are verified. Complete chain query/submessage/migration capabilities, contract events,
    compilation caching, and execution performance testing. Bounded iteration is implemented;
    pagination beyond the configured scan limits remains a future capability.
-3. Test BFT round synchronization and complete multi-validator locked proposal recovery,
+3. Complete and test BFT round synchronization, future-proposal recovery and multi-validator locked proposal recovery,
    reproposal/catch-up after restart, commit validation during historical catch-up,
    and complete validator registration/jail/tombstone transitions and canonical slashing.
    Delegation-driven power commitments and sequential certificate catch-up are implemented;
