@@ -104,18 +104,18 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
 
 ## Verification
 
-Latest hardening checkpoint: revision `2b577db59d961f16809aa35726616333536cf9d6`.
-[Rust/WASM, strict Clippy and four frontend/SDK checks](https://github.com/sunovago/sprax-blockchain/actions/runs/37354635688),
-[Protocol CI, including Docker builds](https://github.com/sunovago/sprax-blockchain/actions/runs/37354635876),
-and [all four CodeQL language analyses](https://github.com/sunovago/sprax-blockchain/actions/runs/37354635672)
-completed successfully. The suite reported 143 passing Rust tests. CodeQL workflow success
-does not clear the repository's open findings or establish independent audit clearance.
+Latest hardening checkpoint: revision `74de42faef3273dc71b1b03ff298a41d4189cad1`.
+[Mainnet hardening verification](https://github.com/sunovago/sprax-blockchain/actions/runs/37434790190),
+[Protocol CI, including Rust integration tests and Docker builds](https://github.com/sunovago/sprax-blockchain/actions/runs/37434790634),
+and [all four CodeQL language analyses](https://github.com/sunovago/sprax-blockchain/actions/runs/37434790217)
+completed successfully. New regressions cover locked-block recovery/reproposal and proposal-carried
+valid-round certificates. CodeQL workflow success does not clear the repository's open findings
+or establish independent audit clearance.
 
-The latest proposer schedule is a protocol change: validator operators must coordinate the
-upgrade; mixed old/new binaries can choose different proposers. Existing mainnet readiness
-remains incomplete pending full consensus round synchronization and reproposal after restart,
-finalized canonical slashing, broader fault and recovery testing, audit/remediation, and launch
-operations.
+The proposer schedule and proposal v3 valid-round certificate are protocol changes: validator
+operators must coordinate the upgrade. Existing mainnet readiness remains incomplete pending
+full multi-validator round synchronization and reproposal/catch-up after restart, finalized
+canonical slashing, broader fault and recovery testing, audit/remediation, and launch operations.
 
 Rust regression tests were added for rejected block rollback, proposal isolation, repeated
 unbond failure, unsupported message rejection, nonzero-round commit verification, certificate
@@ -141,7 +141,7 @@ The SDK has 26 tests and browser wallet has 3 lifecycle/storage tests at this re
 Wallet REST routing and mempool capacity tests also passed at
 `df7478654adca5540b057df0a21350b6702d9d79` in the
 [REST integration verification](https://github.com/sunovago/sprax-blockchain/actions/runs/37190819979).
-Signed-proposal verification is tracked in subsequent branch runs.
+Signed-proposal and recovery verification are included in the latest checkpoint above.
 
 ```sh
 cargo fmt --all -- --check
@@ -164,8 +164,8 @@ verify the chain changes above or a live deployment.
    rollback are verified. Complete chain query/submessage/migration capabilities, contract events,
    compilation caching, and execution performance testing. Bounded iteration is implemented;
    pagination beyond the configured scan limits remains a future capability.
-3. Complete BFT round synchronization and locked proposal handling, reproposal after restart,
-   commit validation during historical catch-up,
+3. Complete BFT round synchronization and multi-validator locked proposal recovery,
+   reproposal/catch-up after restart, commit validation during historical catch-up,
    and complete validator registration/jail/tombstone transitions and canonical slashing.
    Delegation-driven power commitments and sequential certificate catch-up are implemented;
    peer observations are quarantined and have no economic effect.
