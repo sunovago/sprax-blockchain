@@ -809,4 +809,92 @@ mod tests {
             8
         );
     }
+
+    #[tokio::test]
+    async fn restart_reproposes_and_finalizes_the_durable_locked_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = Ed25519Keypair::from_seed(&[43; 32]);
+        let mut genesis = GenesisConfig::default_development();
+        genesis.accounts = vec![GenesisAccount {
+            name: "test".into(),
+            address: key.address(),
+            initial_balance: Amount::from_sprx_whole(1000).unwrap(),
+        }];
+        genesis.validators = vec![GenesisValidator {
+            operator_address: key.address(),
+            consensus_pubkey: key.public_key_bytes().to_vec(),
+            self_stake: Amount::from_sprx_whole(100).unwrap(),
+            moniker: "test".into(),
+        }];
+        let identity = genesis.fingerprint().unwrap();
+        let store = RedbStore::open(&dir.path().join("state.redb")).unwrap();
+        let ledger = ChainLedger::open_or_init(store, || Ok(genesis)).unwrap();
+        let validators =
+            sprax_consensus::ValidatorSet::from_canonical(ledger.active_validators().unwrap())
+                .unwrap();
+        let locked_block = ledger.build_proposal(key.address()).unwrap();
+        let locked_hash = Hasher::block_hash(&locked_block.header).unwrap();
+        let journal_path = dir.path().join("signing.redb");
+        let journal = SigningJournal::open(&journal_path, identity, &key).unwrap();
+        let lock_vote = Vote::new(
+            identity,
+            VoteType::Precommit,
+            1,
+            0,
+            Some(locked_hash),
+            key.address(),
+            vec![],
+        );
+        journal
+            .sign_with_block(lock_vote, &key, Some(locked_block.clone()), None)
+            .unwrap();
+        drop(journal);
+
+        let journal = SigningJournal::open(&journal_path, identity, &key).unwrap();
+        let (tx, _) = mpsc::channel(8);
+        let (blocks, _) = mpsc::channel(8);
+        let (votes, vote_rx) = mpsc::channel(8);
+        let (proposals, proposal_rx) = mpsc::channel(8);
+        let (evidence, _) = mpsc::channel(8);
+        let p2p = P2pService::new(
+            sprax_network::PeerId::new("locked-restart-test").unwrap(),
+            "sprax-devnet-1".into(),
+            sprax_network::NetworkConfig::default(),
+            tx,
+            blocks,
+            votes,
+            proposals,
+            evidence,
+            Arc::new(|_, _| Vec::new()),
+        );
+        let ledger = Arc::new(RwLock::new(ledger));
+        let mut driver = ConsensusDriver::new(
+            BftConsensusEngine::new(1, validators),
+            Arc::new(RwLock::new(StakingKeeper::default())),
+            ledger.clone(),
+            p2p,
+            key,
+            Arc::new(RwLock::new(crate::evidence_pool::EvidencePool::default())),
+            journal,
+            ConsensusTimeoutConfig::default(),
+            vote_rx,
+            proposal_rx,
+            Arc::new(AtomicBool::new(true)),
+            0,
+        )
+        .unwrap();
+
+        assert_eq!(driver.engine.locked_block(), Some(locked_hash));
+        assert_eq!(driver.pending_block, Some(locked_block.clone()));
+        driver.run_one_height().await;
+
+        assert_eq!(ledger.read().height(), 1);
+        let reproposal = driver.signing_journal.latest_proposal().unwrap().unwrap();
+        assert_eq!(reproposal.round, 1);
+        assert_eq!(
+            Hasher::block_hash(&reproposal.block.header).unwrap(),
+            locked_hash
+        );
+        assert_eq!(reproposal.block, locked_block);
+    }
 }
