@@ -41,8 +41,10 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
 - Consensus locks survive retries at the same height; conflicting proposals receive nil
   prevotes unless a later-round signed prevote quorum certifies a replacement block. The
   signing journal verifies that certificate and durably stores the replacement block and
-  lock before releasing the precommit signature. Full round synchronization and reproposal
-  after restart still need work.
+  lock before releasing the precommit signature. The driver now bounds future-round vote
+  retention and jumps to a later round only after authenticated +2/3 prevotes agree on one
+  block hash or nil; a non-nil certificate is installed as valid-round evidence. Multi-validator
+  round-transition, reproposal and catch-up testing still need work.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing
   coordinates and precommit lock; conflicting/reversed coordinates are refused. The
   signing database is bound to the genesis and validator public key. A durable marker
@@ -114,8 +116,8 @@ or establish independent audit clearance.
 
 The proposer schedule and proposal v3 valid-round certificate are protocol changes: validator
 operators must coordinate the upgrade. Existing mainnet readiness remains incomplete pending
-full multi-validator round synchronization and reproposal/catch-up after restart, finalized
-canonical slashing, broader fault and recovery testing, audit/remediation, and launch operations.
+multi-validator round-transition/reproposal/catch-up testing, finalized canonical slashing,
+broader fault and recovery testing, audit/remediation, and launch operations.
 
 Rust regression tests were added for rejected block rollback, proposal isolation, repeated
 unbond failure, unsupported message rejection, nonzero-round commit verification, certificate
@@ -164,7 +166,7 @@ verify the chain changes above or a live deployment.
    rollback are verified. Complete chain query/submessage/migration capabilities, contract events,
    compilation caching, and execution performance testing. Bounded iteration is implemented;
    pagination beyond the configured scan limits remains a future capability.
-3. Complete BFT round synchronization and multi-validator locked proposal recovery,
+3. Test BFT round synchronization and complete multi-validator locked proposal recovery,
    reproposal/catch-up after restart, commit validation during historical catch-up,
    and complete validator registration/jail/tombstone transitions and canonical slashing.
    Delegation-driven power commitments and sequential certificate catch-up are implemented;

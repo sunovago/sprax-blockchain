@@ -9,6 +9,7 @@ use sprax_crypto::{Ed25519Keypair, Hasher};
 use sprax_network::P2pService;
 use sprax_storage::RedbStore;
 use sprax_types::{Address, Block, CommitSignature, Hash32};
+use std::collections::BTreeMap;
 use std::sync::{
     atomic::{AtomicBool, Ordering},
     Arc,
@@ -37,6 +38,9 @@ pub struct ConsensusDriver {
 
     last_attempted_height: u64,
     current_round: u32,
+    pending_round: Option<u32>,
+    future_prevote_rounds: BTreeMap<u32, BTreeMap<Address, Vote>>,
+    pending_valid_round_certificate: Option<(u32, Hash32, Vec<Vote>)>,
     min_peers_before_start: usize,
 }
 
@@ -122,6 +126,9 @@ impl ConsensusDriver {
             pending_block,
             last_attempted_height,
             current_round,
+            pending_round: None,
+            future_prevote_rounds: BTreeMap::new(),
+            pending_valid_round_certificate: None,
             min_peers_before_start,
         })
     }
@@ -173,15 +180,23 @@ impl ConsensusDriver {
     async fn run_one_height(&mut self) {
         let next_height = self.ledger.read().height() + 1;
         let round = if next_height == self.last_attempted_height {
-            let Some(next_round) = self.current_round.checked_add(1) else {
-                warn!("consensus round exhausted; refusing to wrap signing coordinates");
-                return;
+            let next_round = if let Some(target) = self.pending_round.take() {
+                target.max(self.current_round.saturating_add(1))
+            } else {
+                let Some(next_round) = self.current_round.checked_add(1) else {
+                    warn!("consensus round exhausted; refusing to wrap signing coordinates");
+                    return;
+                };
+                next_round
             };
             self.current_round = next_round;
             self.current_round
         } else {
             self.last_attempted_height = next_height;
             self.current_round = 0;
+            self.pending_round = None;
+            self.future_prevote_rounds.clear();
+            self.pending_valid_round_certificate = None;
             0
         };
 
@@ -205,6 +220,17 @@ impl ConsensusDriver {
         self.engine.set_validator_set(val_set);
         self.engine.start_height(next_height);
         self.engine.set_round(round);
+        if let Some((valid_round, block_hash, votes)) = self.pending_valid_round_certificate.take()
+        {
+            if valid_round < round {
+                self.engine.install_valid_round_certificate(
+                    next_height,
+                    valid_round,
+                    block_hash,
+                    &votes,
+                );
+            }
+        }
         self.precommitted_this_round = false;
         let durable_locked_block = if self.engine.locked_block().is_some() {
             self.signing_journal
@@ -485,7 +511,19 @@ impl ConsensusDriver {
             .await
             {
                 Ok(Some(vote)) => {
-                    if vote.height != height || vote.round != round {
+                    if vote.height != height {
+                        continue;
+                    }
+                    if vote.round > round {
+                        self.observe_future_prevote(vote);
+                        if let Some(target) = self.pending_round {
+                            if target > round {
+                                return;
+                            }
+                        }
+                        continue;
+                    }
+                    if vote.round < round {
                         continue;
                     }
                     if self.handle_inbound_vote(vote).await {
@@ -496,6 +534,99 @@ impl ConsensusDriver {
                 Ok(None) => return,
             }
         }
+    }
+
+    fn observe_future_prevote(&mut self, vote: Vote) {
+        // Future-round messages are untrusted input. Restrict retention to a small horizon and
+        // to prevotes, whose +2/3 certificate is sufficient evidence to skip a stalled round.
+        const MAX_FUTURE_ROUND_GAP: u32 = 32;
+        const MAX_RETAINED_FUTURE_ROUNDS: usize = 8;
+        if vote.vote_type != VoteType::Prevote
+            || vote.height != self.engine.current_height()
+            || vote.round <= self.current_round
+            || vote.round.saturating_sub(self.current_round) > MAX_FUTURE_ROUND_GAP
+            || self.pending_round.is_some_and(|target| vote.round < target)
+        {
+            return;
+        }
+        let Ok(genesis) = self.ledger.read().genesis().fingerprint() else {
+            return;
+        };
+        if vote.genesis != genesis || vote.signature.len() != 64 {
+            return;
+        }
+        let Some(validator) = self
+            .engine
+            .validator_set()
+            .validators()
+            .iter()
+            .find(|validator| validator.address == vote.validator_address)
+        else {
+            return;
+        };
+        let Ok(sign_bytes) = vote.sign_bytes() else {
+            return;
+        };
+        if Ed25519Keypair::verify(&validator.public_key, &sign_bytes, &vote.signature).is_err() {
+            return;
+        }
+
+        if !self.future_prevote_rounds.contains_key(&vote.round)
+            && self.future_prevote_rounds.len() >= MAX_RETAINED_FUTURE_ROUNDS
+        {
+            return;
+        }
+        let votes = self.future_prevote_rounds.entry(vote.round).or_default();
+        // A validator contributes once per round. Conflicting future votes do not replace the
+        // first authenticated vote and therefore cannot inflate either outcome's power.
+        votes.entry(vote.validator_address).or_insert(vote);
+        // Evaluate every retained round; a certified later round lets us skip directly to it.
+        let target = self
+            .future_prevote_rounds
+            .iter()
+            .find_map(|(round, votes)| {
+                self.future_prevote_quorum_hash(votes)
+                    .map(|hash| (*round, hash))
+            });
+        if let Some((target, hash)) = target {
+            self.pending_round = Some(target);
+            if let Some(hash) = hash {
+                let votes = self.future_prevote_rounds[&target]
+                    .values()
+                    .filter(|vote| vote.block_hash == Some(hash))
+                    .cloned()
+                    .collect();
+                self.pending_valid_round_certificate = Some((target, hash, votes));
+            }
+            self.future_prevote_rounds
+                .retain(|round, _| *round >= target);
+        }
+    }
+
+    fn future_prevote_quorum_hash(
+        &self,
+        votes: &BTreeMap<Address, Vote>,
+    ) -> Option<Option<Hash32>> {
+        let mut power_by_hash = BTreeMap::<Option<Hash32>, u64>::new();
+        for vote in votes.values() {
+            let Some(validator) = self
+                .engine
+                .validator_set()
+                .validators()
+                .iter()
+                .find(|validator| validator.address == vote.validator_address)
+            else {
+                continue;
+            };
+            let power = power_by_hash.entry(vote.block_hash).or_default();
+            *power = power.saturating_add(validator.voting_power);
+        }
+        power_by_hash.into_iter().find_map(|(hash, power)| {
+            self.engine
+                .validator_set()
+                .has_quorum(power)
+                .then_some(hash)
+        })
     }
 
     async fn handle_inbound_vote(&mut self, vote: Vote) -> bool {
@@ -794,6 +925,25 @@ mod tests {
     use sprax_core::{GenesisAccount, GenesisConfig, GenesisValidator};
     use sprax_types::Amount;
 
+    fn signed_prevote(
+        key: &Ed25519Keypair,
+        genesis: Hash32,
+        round: u32,
+        hash: Option<Hash32>,
+    ) -> Vote {
+        let mut vote = Vote::new(
+            genesis,
+            VoteType::Prevote,
+            1,
+            round,
+            hash,
+            key.address(),
+            Vec::new(),
+        );
+        vote.signature = key.sign(&vote.sign_bytes().unwrap());
+        vote
+    }
+
     #[tokio::test]
     async fn restart_after_proposal_only_advances_past_the_durable_round() {
         let dir = tempfile::tempdir().unwrap();
@@ -962,5 +1112,99 @@ mod tests {
             locked_hash
         );
         assert_eq!(reproposal.block, locked_block);
+    }
+
+    #[tokio::test]
+    async fn future_round_quorum_jumps_only_on_one_authenticated_outcome() {
+        let dir = tempfile::tempdir().unwrap();
+        let keys = [
+            Ed25519Keypair::from_seed(&[51; 32]),
+            Ed25519Keypair::from_seed(&[52; 32]),
+            Ed25519Keypair::from_seed(&[53; 32]),
+            Ed25519Keypair::from_seed(&[54; 32]),
+        ];
+        let mut genesis = GenesisConfig::default_development();
+        genesis.accounts = keys
+            .iter()
+            .map(|key| GenesisAccount {
+                name: key.address().to_string(),
+                address: key.address(),
+                initial_balance: Amount::from_sprx_whole(1000).unwrap(),
+            })
+            .collect();
+        genesis.validators = keys
+            .iter()
+            .map(|key| GenesisValidator {
+                operator_address: key.address(),
+                consensus_pubkey: key.public_key_bytes().to_vec(),
+                self_stake: Amount::from_sprx_whole(100).unwrap(),
+                moniker: key.address().to_string(),
+            })
+            .collect();
+        let identity = genesis.fingerprint().unwrap();
+        let store = RedbStore::open(&dir.path().join("state.redb")).unwrap();
+        let ledger = ChainLedger::open_or_init(store, || Ok(genesis)).unwrap();
+        let validators =
+            sprax_consensus::ValidatorSet::from_canonical(ledger.active_validators().unwrap())
+                .unwrap();
+        let local_key = Ed25519Keypair::from_seed(&[51; 32]);
+        let journal =
+            SigningJournal::open(&dir.path().join("signing.redb"), identity, &local_key).unwrap();
+        let (tx, _) = mpsc::channel(8);
+        let (blocks, _) = mpsc::channel(8);
+        let (votes, vote_rx) = mpsc::channel(8);
+        let (proposals, proposal_rx) = mpsc::channel(8);
+        let (evidence, _) = mpsc::channel(8);
+        let p2p = P2pService::new(
+            sprax_network::PeerId::new("round-sync-test").unwrap(),
+            "sprax-devnet-1".into(),
+            sprax_network::NetworkConfig::default(),
+            tx,
+            blocks,
+            votes,
+            proposals,
+            evidence,
+            Arc::new(|_, _| Vec::new()),
+        );
+        let ledger = Arc::new(RwLock::new(ledger));
+        let mut driver = ConsensusDriver::new(
+            BftConsensusEngine::new(1, validators),
+            Arc::new(RwLock::new(StakingKeeper::default())),
+            ledger,
+            p2p,
+            local_key,
+            Arc::new(RwLock::new(crate::evidence_pool::EvidencePool::default())),
+            journal,
+            ConsensusTimeoutConfig::default(),
+            vote_rx,
+            proposal_rx,
+            Arc::new(AtomicBool::new(true)),
+            0,
+        )
+        .unwrap();
+        driver.current_round = 1;
+        let hash = Hash32::ZERO;
+        for key in keys.iter().take(2) {
+            driver.observe_future_prevote(signed_prevote(key, identity, 4, Some(hash)));
+        }
+        assert_eq!(driver.pending_round, None);
+        assert_eq!(driver.future_prevote_rounds[&4].len(), 2);
+
+        driver.observe_future_prevote(signed_prevote(&keys[2], identity, 4, Some(hash)));
+        assert_eq!(driver.pending_round, Some(4));
+        let (certified_round, certified_hash, certificate) =
+            driver.pending_valid_round_certificate.as_ref().unwrap();
+        assert_eq!((*certified_round, *certified_hash), (4, hash));
+        assert_eq!(certificate.len(), 3);
+
+        driver.pending_round = None;
+        driver.future_prevote_rounds.clear();
+        driver.observe_future_prevote(signed_prevote(&keys[1], identity, 5, Some(hash)));
+        driver.observe_future_prevote(signed_prevote(&keys[2], identity, 5, None));
+        driver.observe_future_prevote(signed_prevote(&keys[3], identity, 5, Some(hash)));
+        assert_eq!(driver.pending_round, None);
+
+        driver.observe_future_prevote(signed_prevote(&keys[3], identity, 100, Some(hash)));
+        assert!(!driver.future_prevote_rounds.contains_key(&100));
     }
 }
