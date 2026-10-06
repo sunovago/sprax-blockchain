@@ -173,9 +173,9 @@ impl SigningJournal {
                         )
                 {
                     let locked_round = state.locked_round.ok_or("durable lock has no round")?;
-                    if !proposal
+                    if proposal
                         .valid_round
-                        .is_some_and(|valid_round| valid_round > locked_round)
+                        .is_none_or(|valid_round| valid_round <= locked_round)
                     {
                         return Err("proposal conflicts with durable lock".into());
                     }
