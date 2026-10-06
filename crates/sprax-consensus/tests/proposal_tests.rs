@@ -85,7 +85,7 @@ fn proposal_carries_a_verified_prior_round_unlock_certificate() {
                 genesis,
                 VoteType::Prevote,
                 9,
-                0,
+                1,
                 Some(block_hash),
                 key.address(),
                 vec![],
@@ -97,8 +97,8 @@ fn proposal_carries_a_verified_prior_round_unlock_certificate() {
     let mut proposal = SignedProposal {
         genesis,
         signer: proposer.address(),
-        round: 1,
-        valid_round: Some(0),
+        round: 2,
+        valid_round: Some(1),
         valid_round_votes,
         block,
         signature: vec![],
@@ -111,9 +111,9 @@ fn proposal_carries_a_verified_prior_round_unlock_certificate() {
     let mut engine = sprax_consensus::BftConsensusEngine::new(9, validators.clone());
     let locked_hash = Hash32::new([54; 32]);
     engine.restore_lock(9, 0, locked_hash);
-    engine.set_round(1);
+    engine.set_round(2);
     assert!(!engine.can_prevote_block(block_hash));
-    engine.install_valid_round_certificate(9, 0, block_hash, &proposal.valid_round_votes);
+    engine.install_valid_round_certificate(9, 1, block_hash, &proposal.valid_round_votes);
     engine
         .propose_block(block_hash, proposer.address())
         .unwrap();
@@ -131,7 +131,7 @@ fn proposal_carries_a_verified_prior_round_unlock_certificate() {
         .verify(genesis, proposer.address(), &validators)
         .is_err());
     let mut forged = proposal;
-    forged.valid_round = Some(1);
+    forged.valid_round = Some(2);
     assert!(forged
         .verify(genesis, proposer.address(), &validators)
         .is_err());
