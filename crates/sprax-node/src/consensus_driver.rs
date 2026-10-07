@@ -622,7 +622,8 @@ impl ConsensusDriver {
 
     fn observe_future_prevote(&mut self, vote: Vote) {
         // Future-round messages are untrusted input. Restrict retention to a small horizon and
-        // to prevotes, whose +2/3 certificate is sufficient evidence to skip a stalled round.
+        // to authenticated prevotes. More than one-third power can synchronize the round,
+        // but only a same-block +2/3 certificate may establish a valid value or unlock.
         const MAX_FUTURE_ROUND_GAP: u32 = 32;
         const MAX_RETAINED_FUTURE_ROUNDS: usize = 8;
         if vote.vote_type != VoteType::Prevote
@@ -664,13 +665,26 @@ impl ConsensusDriver {
         // A validator contributes once per round. Conflicting future votes do not replace the
         // first authenticated vote and therefore cannot inflate either outcome's power.
         votes.entry(vote.validator_address).or_insert(vote);
-        // Evaluate every retained round; a certified later round lets us skip directly to it.
+        // Round synchronization is independent of agreement on a block (Tendermint
+        // Algorithm 1, lines 55-56). Requiring +2/3 here strands two restarted
+        // validators behind two advancing validators after a quorum outage.
         let target = self
             .future_prevote_rounds
             .iter()
             .find_map(|(round, votes)| {
-                self.future_prevote_quorum_hash(votes)
-                    .map(|hash| (*round, hash))
+                let power: u128 = votes
+                    .keys()
+                    .filter_map(|address| {
+                        self.engine
+                            .validator_set()
+                            .validators()
+                            .iter()
+                            .find(|validator| validator.address == *address)
+                    })
+                    .map(|validator| u128::from(validator.voting_power))
+                    .sum();
+                (power * 3 > u128::from(self.engine.validator_set().total_voting_power()))
+                    .then(|| (*round, self.future_prevote_quorum_hash(votes).flatten()))
             });
         if let Some((target, hash)) = target {
             self.pending_round = Some(target);
@@ -1281,14 +1295,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn future_round_quorum_jumps_only_on_one_authenticated_outcome() {
+    async fn future_round_sync_does_not_weaken_block_certificate_threshold() {
         let (_dir, keys, identity, mut driver) = round_sync_fixture();
         driver.current_round = 1;
         let hash = Hash32::ZERO;
-        for key in keys.iter().take(2) {
-            driver.observe_future_prevote(signed_prevote(key, identity, 4, Some(hash)));
-        }
+        driver.observe_future_prevote(signed_prevote(&keys[0], identity, 4, Some(hash)));
         assert_eq!(driver.pending_round, None);
+        let mut forged = signed_prevote(&keys[1], identity, 4, Some(hash));
+        forged.signature[0] ^= 1;
+        driver.observe_future_prevote(forged);
+        driver.observe_future_prevote(signed_prevote(&keys[0], identity, 4, None));
+        driver.observe_future_prevote(signed_prevote(&keys[1], Hash32::ZERO, 4, Some(hash)));
+        assert_eq!(driver.pending_round, None);
+        driver.observe_future_prevote(signed_prevote(&keys[1], identity, 4, Some(hash)));
+        assert_eq!(driver.pending_round, Some(4));
+        assert!(driver.pending_valid_round_certificate.is_none());
         assert_eq!(driver.future_prevote_rounds[&4].len(), 2);
 
         let mut forged = signed_prevote(&keys[2], identity, 4, Some(hash));
@@ -1297,7 +1318,8 @@ mod tests {
         driver.observe_future_prevote(signed_prevote(&keys[0], identity, 4, Some(hash)));
         driver.observe_future_prevote(signed_prevote(&keys[0], identity, 4, None));
         driver.observe_future_prevote(signed_prevote(&keys[2], Hash32::ZERO, 4, Some(hash)));
-        assert_eq!(driver.pending_round, None);
+        assert_eq!(driver.pending_round, Some(4));
+        assert!(driver.pending_valid_round_certificate.is_none());
         assert_eq!(driver.future_prevote_rounds[&4].len(), 2);
 
         driver.observe_future_prevote(signed_prevote(&keys[2], identity, 4, Some(hash)));
@@ -1312,10 +1334,46 @@ mod tests {
         driver.observe_future_prevote(signed_prevote(&keys[1], identity, 5, Some(hash)));
         driver.observe_future_prevote(signed_prevote(&keys[2], identity, 5, None));
         driver.observe_future_prevote(signed_prevote(&keys[3], identity, 5, Some(hash)));
-        assert_eq!(driver.pending_round, None);
+        assert_eq!(driver.pending_round, Some(5));
+        assert!(driver.pending_valid_round_certificate.is_none());
+        assert_eq!(driver.engine.valid_round(), None);
+        assert_eq!(driver.engine.locked_round(), None);
 
         driver.observe_future_prevote(signed_prevote(&keys[3], identity, 100, Some(hash)));
         assert!(!driver.future_prevote_rounds.contains_key(&100));
+    }
+
+    #[tokio::test]
+    async fn round_sync_requires_more_than_one_third_power_and_preserves_lock() {
+        let (_dir, keys, identity, mut driver) = round_sync_fixture();
+        let validators = keys
+            .iter()
+            .zip([1, 1, 1, 3])
+            .map(|(key, power)| {
+                sprax_consensus::Validator::new(
+                    key.address(),
+                    key.public_key_bytes().to_vec(),
+                    power,
+                )
+            })
+            .collect();
+        driver
+            .engine
+            .set_validator_set(sprax_consensus::ValidatorSet::new(validators).unwrap());
+        driver.current_round = 1;
+        let locked_hash = Hasher::sha256(b"existing lock");
+        driver.engine.restore_lock(1, 0, locked_hash);
+        for key in keys.iter().take(2) {
+            driver.observe_future_prevote(signed_prevote(key, identity, 4, None));
+        }
+        // Two signers have exactly one third, despite being half the validator count.
+        assert_eq!(driver.pending_round, None);
+        driver.observe_future_prevote(signed_prevote(&keys[2], identity, 4, Some(Hash32::ZERO)));
+        assert_eq!(driver.pending_round, Some(4));
+        assert!(driver.pending_valid_round_certificate.is_none());
+        assert_eq!(driver.engine.locked_block(), Some(locked_hash));
+        assert_eq!(driver.engine.locked_round(), Some(0));
+        assert_eq!(driver.engine.valid_round(), None);
     }
 
     #[tokio::test]

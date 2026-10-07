@@ -64,6 +64,7 @@ pub struct P2pService {
     inbound_proposal_tx: mpsc::Sender<SignedProposal>,
     inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
     block_fetch_fn: BlockFetchFn,
+    finalized_tip: Arc<RwLock<(u64, Hash32)>>,
 }
 
 impl std::fmt::Debug for P2pService {
@@ -112,6 +113,7 @@ impl P2pService {
             inbound_proposal_tx,
             inbound_evidence_tx,
             block_fetch_fn,
+            finalized_tip: Arc::new(RwLock::new((0, Hash32::ZERO))),
         }
     }
 
@@ -140,10 +142,22 @@ impl P2pService {
 
     /// Broadcasts a newly produced/committed block to all connected peers.
     pub fn broadcast_block(&self, block: Block) {
+        if let Ok(hash) = sprax_crypto::Hasher::block_hash(&block.header) {
+            self.update_finalized_tip(block.header.height, hash);
+        }
         let peers = self.peers.read();
         let msg = NetworkMessage::BlockGossip(block);
         for peer in peers.values() {
             let _ = peer.send(msg.clone());
+        }
+    }
+
+    /// Refresh handshake metadata only after the caller commits a canonical block.
+    /// Raw peer messages must never advance this tip.
+    pub fn update_finalized_tip(&self, height: u64, hash: Hash32) {
+        let mut tip = self.finalized_tip.write();
+        if height > tip.0 || (tip.0 == 0 && tip.1 == Hash32::ZERO) {
+            *tip = (height, hash);
         }
     }
 
@@ -262,6 +276,9 @@ impl P2pService {
         let max_message_size = self.config.max_message_size_bytes;
         let mut shutdown = ShutdownSignal::new(&self.shutdown);
 
+        self.update_finalized_tip(initial_height, initial_hash);
+        let finalized_tip = Arc::clone(&self.finalized_tip);
+
         // Spawn Inbound TCP Listener Loop
         tokio::spawn(async move {
             while is_running.load(Ordering::SeqCst) {
@@ -289,14 +306,15 @@ impl P2pService {
                         let fetch_fn = Arc::clone(&fetch_fn);
 
                         let connection_shutdown = shutdown.clone();
+                        let (current_height, current_hash) = *finalized_tip.read();
                         tokio::spawn(async move {
                             let _connection_slot = slot;
                             let connection = Self::handle_inbound_connection(
                                 stream,
                                 l_id,
                                 c_id,
-                                initial_height,
-                                initial_hash,
+                                current_height,
+                                current_hash,
                                 p,
                                 k,
                                 tx_in,

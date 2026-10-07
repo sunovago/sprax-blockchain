@@ -1,7 +1,27 @@
 # Mainnet readiness
 
-Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 complete",
+Updated: 2026-10-07. Status: INCOMPLETE. This file supersedes historical "12/12 complete",
 "genesis ready", and "cleared for mainnet" claims.
+
+## Four-validator recovery verification
+
+The new TCP integration scenario uses four equal-power active validators and real persistent
+node directories. It checks certified common checkpoints, continued progress with one validator
+offline, restart/catch-up using the same signing journal, no finalization with two validators
+offline, and resumed progress after both return. These are graceful service restarts in one
+process; live network partitions, OS process termination, and operator-run soak remain open.
+The scenario passed locally after both recovery fixes; the associated PR tracks full Linux CI.
+Focused driver tests and strict node/network Clippy also passed locally.
+
+The scenario exposed stale startup-height metadata in inbound handshakes. Handshakes now
+advertise the latest locally finalized/applied tip; unverified peer gossip cannot advance it.
+It also exposed a round synchronization threshold that required block agreement before joining
+a later round. More than one-third authenticated voting power for the same future round now
+permits round synchronization, including mixed nil/block prevotes. Block certificates, unlocking,
+and finalization still require more than two-thirds for one outcome. This follows the round-entry
+distinction in [Tendermint Algorithm 1, lines 55?56](https://arxiv.org/pdf/1807.04938).
+Regression tests cover forged/replayed votes, exact one-third power, and preservation of locks.
+The bounded round horizon and missing-proposal retransmission remain liveness limitations.
 
 ## Current hardening changes
 
@@ -42,8 +62,8 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
   prevotes unless a later-round signed prevote quorum certifies a replacement block. The
   signing journal verifies that certificate and durably stores the replacement block and
   lock before releasing the precommit signature. The driver now bounds future-round vote
-  retention and jumps to a later round only after authenticated +2/3 prevotes agree on one
-  block hash or nil. On entry, same-round certificates and buffered prevotes (including nil)
+  retention and joins a later round after authenticated prevotes represent more than one-third
+  power; valid block certificates still require +2/3 agreement on one block hash. On entry, same-round certificates and buffered prevotes (including nil)
   are replayed before local voting, and expired round buffers are removed. Four-validator
   signed-message driver tests cover jump-to-finalization and lock-preserving nil transitions.
   The signing journal also verifies the replacement block and later-round quorum before
@@ -56,7 +76,7 @@ Updated: 2026-10-06. Status: INCOMPLETE. This file supersedes historical "12/12 
   again on consumption. Driver tests finalize from an early cached proposal even after
   its inbound channel closes, with both locked and unlocked validators. Proposals never
   received at all still need a peer request/retransmission mechanism. TCP partition and
-  multi-node restart/catch-up tests remain outstanding.
+  abrupt-crash tests remain outstanding; graceful restart/catch-up is covered above.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing
   coordinates and precommit lock; conflicting/reversed coordinates are refused. The
   signing database is bound to the genesis and validator public key. A durable marker
@@ -184,8 +204,8 @@ verify the chain changes above or a live deployment.
    Delegation-driven power commitments and sequential certificate catch-up are implemented;
    peer observations are quarantined and have no economic effect.
 4. Exercise three or more active validators through partitions, Byzantine input, proposer
-   failures, restarts, catch-up, and sustained load. Existing two-validator-plus-observer tests
-   do not establish these properties.
+   failures, abrupt process crashes, catch-up, and sustained load. The four-active-validator
+   graceful-restart/quorum-outage scenario above is narrower than this full launch gate.
 5. Finish storage recovery, pruning/rebuild compatibility,
    byte budgets and overload recovery for bounded network queues, block resource limits
    including commit overhead, and performance of archive/overlay reads. Genesis accounting

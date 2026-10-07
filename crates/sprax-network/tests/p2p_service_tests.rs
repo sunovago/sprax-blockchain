@@ -66,6 +66,41 @@ fn build_service_with_config(
 }
 
 #[tokio::test]
+async fn reconnect_handshake_uses_the_latest_finalized_tip() {
+    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = reserved.local_addr().unwrap().port();
+    let (server_blocks, _) = mpsc::channel(8);
+    let server = build_service(
+        port,
+        server_blocks,
+        Arc::new(|from, to| (from..=to.min(3)).map(synthetic_block).collect()),
+    );
+    drop(reserved);
+    server.start(0, Hash32::ZERO).await.unwrap();
+    let latest_hash = sprax_crypto::Hasher::block_hash(&synthetic_block(3).header).unwrap();
+    server.update_finalized_tip(3, latest_hash);
+    server.update_finalized_tip(1, Hash32::ZERO);
+    let (blocks, mut incoming) = mpsc::channel(8);
+    let client = build_service(0, blocks, Arc::new(|_, _| Vec::new()));
+    client
+        .dial_peer(&format!("127.0.0.1:{port}"), 0, Hash32::ZERO)
+        .await
+        .unwrap();
+    for height in 1..=3 {
+        let block = tokio::time::timeout(Duration::from_secs(3), incoming.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(block.header.height, height);
+    }
+    let peer = client.connected_peers().pop().unwrap();
+    assert_eq!(peer.height, 3);
+    assert_eq!(peer.latest_block_hash, latest_hash);
+    client.stop();
+    server.stop();
+}
+
+#[tokio::test]
 async fn oversized_handshakes_are_closed_and_pending_connections_count_towards_the_limit() {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let port = 37_950;
@@ -297,7 +332,7 @@ async fn stop_closes_pending_handshakes_active_sockets_and_releases_listener() {
     assert_eq!(service.connected_peers_count(), 0);
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     let listener = loop {
-        match tokio::net::TcpListener::bind(("127.0.0.1", port)).await {
+        match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
             Ok(listener) => break listener,
             Err(_) => {
                 assert!(

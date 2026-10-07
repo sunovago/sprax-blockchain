@@ -443,6 +443,12 @@ impl NodeService {
             .apply_block(block)
             .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
 
+        if let Some(p2p) = self.p2p.read().as_ref() {
+            if let Ok(hash) = Hasher::block_hash(guard.latest_header()) {
+                p2p.update_finalized_tip(guard.height(), hash);
+            }
+        }
+
         Ok(receipts)
     }
 
@@ -608,6 +614,8 @@ impl NodeService {
             || self.config.consensus.enabled;
         let is_running = Arc::clone(&self.is_running);
 
+        let p2p_for_tip = p2p_service.clone();
+
         // Background Inbound Gossip Processor
         self.background_tasks.write().push(tokio::spawn(async move {
             while is_running.load(Ordering::SeqCst) {
@@ -628,7 +636,11 @@ impl NodeService {
                                 _ => { warn!("rejected block gossip without a valid quorum certificate"); continue; }
                             }
                         }
-                        let _ = guard.apply_block(block);
+                        if guard.apply_block(block).is_ok() {
+                            if let Ok(hash) = Hasher::block_hash(guard.latest_header()) {
+                                p2p_for_tip.update_finalized_tip(guard.height(), hash);
+                            }
+                        }
                     }
                     else => break,
                 }
