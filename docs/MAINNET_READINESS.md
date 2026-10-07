@@ -9,7 +9,7 @@ The new TCP integration scenario uses four equal-power active validators and rea
 node directories. It checks certified common checkpoints, continued progress with one validator
 offline, restart/catch-up using the same signing journal, no finalization with two validators
 offline, and resumed progress after both return. These are graceful service restarts in one
-process; live network partitions, OS process termination, and operator-run soak remain open.
+process; the separate OS-process fault scenario below extends this coverage.
 The scenario passed locally after both recovery fixes; the associated PR tracks full Linux CI.
 Focused driver tests and strict node/network Clippy also passed locally.
 
@@ -22,6 +22,30 @@ and finalization still require more than two-thirds for one outcome. This follow
 distinction in [Tendermint Algorithm 1, lines 55?56](https://arxiv.org/pdf/1807.04938).
 Regression tests cover forged/replayed votes, exact one-third power, and preservation of locks.
 The bounded round horizon and missing-proposal retransmission remain liveness limitations.
+
+## OS-process partition and crash verification
+
+`crates/sprax-node/tests/process_fault_tests.rs` launches four independent validator processes
+with equal stake, actual TCP connections, and separate persistent homes. Controlled TCP relays
+pause cross-partition forwarding while keeping validators alive. The scenario checks:
+
+- A 2+2 partition cannot finalize after in-flight traffic drains; healing resumes progress.
+- A 3+1 partition permits the majority to finalize while the isolated validator stalls;
+  healing brings the isolated validator to the same certified checkpoint.
+- Forced process termination (SIGKILL on Unix / TerminateProcess on Windows) bypasses graceful
+  shutdown. Three survivors continue; reopening the exact home preserves finalized storage
+  and the signing journal, and the restarted fourth validator catches up.
+- Every exported block through the final checkpoint has a valid three-of-four certificate
+  and the same header hash on all four nodes. Signing coordinates do not regress after restart.
+
+The parent owns/cleans up child processes even on assertion failure. `recovery_child` is an
+ignored subprocess entry point, explicitly executed by the parent test; it is not an omitted
+fault test. The parent runs in the ordinary workspace CI test command.
+
+These are bounded localhost tests with static stake and empty blocks. Relays preserve queued
+TCP bytes; this does not establish recovery after socket resets, arbitrary packet loss,
+unbounded partitions, deterministic crashes at every storage write, Byzantine operators,
+locked-value recovery under all schedules, or production load. Those launch gates remain open.
 
 ## Current hardening changes
 
@@ -75,8 +99,8 @@ The bounded round horizon and missing-proposal retransmission remain liveness li
   proposal data. Cached proposals do not advance rounds or create locks; they are checked
   again on consumption. Driver tests finalize from an early cached proposal even after
   its inbound channel closes, with both locked and unlocked validators. Proposals never
-  received at all still need a peer request/retransmission mechanism. TCP partition and
-  abrupt-crash tests remain outstanding; graceful restart/catch-up is covered above.
+  received at all still need a peer request/retransmission mechanism. Bounded TCP partition and
+  abrupt-process-crash tests are described above; arbitrary fault schedules remain outstanding.
 - Validator votes are durably journaled before broadcast. Restarts restore the signing
   coordinates and precommit lock; conflicting/reversed coordinates are refused. The
   signing database is bound to the genesis and validator public key. A durable marker
@@ -205,7 +229,8 @@ verify the chain changes above or a live deployment.
    peer observations are quarantined and have no economic effect.
 4. Exercise three or more active validators through partitions, Byzantine input, proposer
    failures, abrupt process crashes, catch-up, and sustained load. The four-active-validator
-   graceful-restart/quorum-outage scenario above is narrower than this full launch gate.
+   restart/quorum-outage and process-partition/crash scenarios above are narrower than this
+   full launch gate; sustained load, socket-reset recovery, and adversarial schedules remain open.
 5. Finish storage recovery, pruning/rebuild compatibility,
    byte budgets and overload recovery for bounded network queues, block resource limits
    including commit overhead, and performance of archive/overlay reads. Genesis accounting
