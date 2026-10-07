@@ -313,6 +313,14 @@ fn registration_jail_unjail_and_self_bond_exit_are_canonical() {
         self_stake: coins(50),
         moniker: "new validator".into(),
     };
+    let mut unfunded = registration();
+    if let TxMessage::RegisterValidator { self_stake, .. } = &mut unfunded {
+        *self_stake = coins(1001);
+    }
+    assert!(ledger
+        .submit_transaction(transaction(&ledger, key, vec![unfunded]))
+        .is_err());
+    assert_eq!(ledger.mempool_len(), 0);
     let mut forged = registration();
     if let TxMessage::RegisterValidator { proof, .. } = &mut forged {
         proof[0] ^= 1;

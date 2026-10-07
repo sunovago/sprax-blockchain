@@ -367,6 +367,9 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         for msg in &tx.body.messages {
             if let TxMessage::Transfer { amount, .. }
             | TxMessage::Delegate { amount, .. }
+            | TxMessage::RegisterValidator {
+                self_stake: amount, ..
+            }
             | TxMessage::InstantiateContract { funds: amount, .. }
             | TxMessage::ContractCall { funds: amount, .. } = msg
             {
