@@ -237,6 +237,58 @@ impl NodeService {
         self.evidence_pool.read().len()
     }
 
+    pub fn observed_evidence(&self) -> Vec<sprax_consensus::EquivocationEvidence> {
+        self.evidence_pool.read().observations()
+    }
+    pub fn validator_policy_info(&self) -> Result<serde_json::Value, NodeError> {
+        let ledger = self.ledger.read();
+        Ok(
+            serde_json::json!({ "genesisFingerprint": ledger.genesis().fingerprint().map_err(|e| NodeError::RuntimeError(e.to_string()))?.to_hex(), "policy": ledger.genesis().consensus_params.validator_policy, "unbondingPeriodBlocks": ledger.genesis().consensus_params.unbonding_period_blocks }),
+        )
+    }
+
+    pub fn canonical_delegations(
+        &self,
+        delegator: &Address,
+    ) -> Result<serde_json::Value, NodeError> {
+        let records = self
+            .ledger
+            .read()
+            .canonical_delegations(delegator)
+            .map_err(|e| NodeError::RuntimeError(e.to_string()))?;
+        Ok(serde_json::json!(records.into_iter().map(|(validator, d)| serde_json::json!({ "delegator": delegator.to_hex(), "validator": validator.to_hex(), "shares": d.shares.to_string(), "balance": d.balance.to_string() })).collect::<Vec<_>>()))
+    }
+    pub fn canonical_staking_info(
+        &self,
+        address: &Address,
+    ) -> Result<serde_json::Value, NodeError> {
+        let ledger = self.ledger.read();
+        let result = (|| -> Result<serde_json::Value, sprax_core::CoreError> {
+            let validator = ledger
+                .validator_registry()?
+                .into_iter()
+                .find(|v| v.operator_address == *address);
+            let stake = ledger.get_validator_stake(address)?.tokens;
+            let active = ledger
+                .active_validators()?
+                .iter()
+                .any(|v| v.address == *address);
+            Ok(
+                serde_json::json!({ "address": address.to_hex(), "isValidator": validator.is_some(), "validator": validator.map(|v| serde_json::json!({ "operatorAddress": v.operator_address.to_hex(), "tokens": stake.to_string(), "status": if v.tombstoned { "Tombstoned" } else if v.jailed { "Jailed" } else if active { "Bonded" } else { "Unbonded" }, "moniker": v.moniker })), "delegationsCount": ledger.canonical_delegations(address)?.len(), "unbondingCount": ledger.canonical_unbonding_count(address)? }),
+            )
+        })();
+        result.map_err(|e| NodeError::RuntimeError(e.to_string()))
+    }
+
+    pub fn validator_registry(
+        &self,
+    ) -> Result<Vec<sprax_core::validator_lifecycle::ValidatorRecord>, NodeError> {
+        self.ledger
+            .read()
+            .validator_registry()
+            .map_err(|e| NodeError::RuntimeError(e.to_string()))
+    }
+
     pub fn canonical_validator_set(&self) -> Result<sprax_consensus::ValidatorSet, NodeError> {
         sprax_consensus::ValidatorSet::from_canonical(
             self.ledger
@@ -493,13 +545,11 @@ impl NodeService {
         };
         let initial_val_set = if let Some(key) = &local_validator_key {
             let validators = self.canonical_validator_set()?;
-            if !validators
-                .validators()
-                .iter()
-                .any(|v| v.address == key.address() && v.public_key == key.public_key_bytes())
-            {
+            if !self.validator_registry()?.iter().any(|v| {
+                v.operator_address == key.address() && v.consensus_pubkey == key.public_key_bytes()
+            }) {
                 return Err(NodeError::ConfigError(
-                    "configured signing key is not an active validator".into(),
+                    "configured signing key is not registered".into(),
                 ));
             }
             Some(validators)
@@ -858,7 +908,7 @@ mod tests {
             .await
             .unwrap_err()
             .to_string()
-            .contains("not an active validator"));
+            .contains("not registered"));
         assert!(!service.is_running());
         assert!(!temp.path().join("data/validator-signing.redb").exists());
     }

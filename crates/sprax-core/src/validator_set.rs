@@ -2,8 +2,7 @@ use crate::{CoreError, GenesisConfig, StateAccessor};
 use sprax_storage::ReadonlyKVStore;
 use sprax_types::CanonicalValidator;
 
-/// Version-one protocol limit. Validator registration beyond the genesis registry and
-/// canonical jail/tombstone transitions require a separately versioned state transition.
+/// Protocol active-set limit, applied after canonical registry eligibility checks.
 pub const MAX_ACTIVE_VALIDATORS: usize = 100;
 
 pub fn canonical_validator_set<S: ReadonlyKVStore>(
@@ -11,7 +10,18 @@ pub fn canonical_validator_set<S: ReadonlyKVStore>(
     store: &S,
 ) -> Result<Vec<CanonicalValidator>, CoreError> {
     let mut bonded = Vec::with_capacity(genesis.validators.len());
-    for registered in &genesis.validators {
+    for registered in crate::validator_lifecycle::registry(store)? {
+        if registered.jailed || registered.tombstoned {
+            continue;
+        }
+        let self_bond = StateAccessor::get_delegation(
+            store,
+            &registered.operator_address,
+            &registered.operator_address,
+        )?;
+        if self_bond.balance < genesis.consensus_params.validator_policy.min_self_stake {
+            continue;
+        }
         let stake = StateAccessor::get_validator_stake(store, &registered.operator_address)?;
         if !stake.tokens.is_zero() {
             bonded.push((stake.tokens, registered));

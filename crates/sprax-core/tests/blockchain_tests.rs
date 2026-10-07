@@ -481,6 +481,17 @@ fn test_scenario_12_delegate_transaction_moves_real_balance() {
     let mut genesis = GenesisConfig::default_development();
     genesis.accounts[0].address = alice_addr;
     genesis.accounts[0].initial_balance = Amount::from_sprx_whole(1_000).unwrap();
+    genesis.accounts.push(sprax_core::GenesisAccount {
+        name: "validator".into(),
+        address: validator_addr,
+        initial_balance: Amount::ONE_SPRX,
+    });
+    genesis.validators.push(sprax_core::GenesisValidator {
+        operator_address: validator_addr,
+        consensus_pubkey: vec![7; 32],
+        self_stake: Amount::ONE_SPRX,
+        moniker: "validator".into(),
+    });
 
     let mut ledger = ChainLedger::init_from_genesis(genesis).unwrap();
 
@@ -522,7 +533,10 @@ fn test_scenario_12_delegate_transaction_moves_real_balance() {
     assert_eq!(alice_after.balance, expected_bal);
 
     let validator_stake = ledger.get_validator_stake(&validator_addr).unwrap();
-    assert_eq!(validator_stake.tokens, delegate_amount);
+    assert_eq!(
+        validator_stake.tokens,
+        delegate_amount.checked_add(Amount::ONE_SPRX).unwrap()
+    );
 
     let delegation = ledger.get_delegation(&alice_addr, &validator_addr).unwrap();
     assert_eq!(delegation.balance, delegate_amount);
@@ -538,6 +552,17 @@ fn test_scenario_13_unbond_then_maturity_sweep_returns_funds() {
     let mut genesis = GenesisConfig::default_development();
     genesis.accounts[0].address = alice_addr;
     genesis.accounts[0].initial_balance = Amount::from_sprx_whole(1_000).unwrap();
+    genesis.accounts.push(sprax_core::GenesisAccount {
+        name: "validator".into(),
+        address: validator_addr,
+        initial_balance: Amount::ONE_SPRX,
+    });
+    genesis.validators.push(sprax_core::GenesisValidator {
+        operator_address: validator_addr,
+        consensus_pubkey: vec![7; 32],
+        self_stake: Amount::ONE_SPRX,
+        moniker: "validator".into(),
+    });
     genesis.consensus_params.unbonding_period_blocks = 2;
 
     let mut ledger = ChainLedger::init_from_genesis(genesis).unwrap();
@@ -595,7 +620,7 @@ fn test_scenario_13_unbond_then_maturity_sweep_returns_funds() {
     let delegation_after_unbond = ledger.get_delegation(&alice_addr, &validator_addr).unwrap();
     assert_eq!(delegation_after_unbond.balance, Amount::ZERO);
     let stake_after_unbond = ledger.get_validator_stake(&validator_addr).unwrap();
-    assert_eq!(stake_after_unbond.tokens, Amount::ZERO);
+    assert_eq!(stake_after_unbond.tokens, Amount::ONE_SPRX);
 
     let balance_before_maturity = ledger.get_account(&alice_addr).unwrap().balance;
 
@@ -627,6 +652,17 @@ fn test_scenario_14_apply_block_matches_mine_block_for_staking() {
     let mut genesis = GenesisConfig::default_development();
     genesis.accounts[0].address = alice_addr;
     genesis.accounts[0].initial_balance = Amount::from_sprx_whole(1_000).unwrap();
+    genesis.accounts.push(sprax_core::GenesisAccount {
+        name: "validator".into(),
+        address: validator_addr,
+        initial_balance: Amount::ONE_SPRX,
+    });
+    genesis.validators.push(sprax_core::GenesisValidator {
+        operator_address: validator_addr,
+        consensus_pubkey: vec![7; 32],
+        self_stake: Amount::ONE_SPRX,
+        moniker: "validator".into(),
+    });
 
     let mut proposer_ledger = ChainLedger::init_from_genesis(genesis.clone()).unwrap();
     let mut peer_ledger = ChainLedger::init_from_genesis(genesis).unwrap();

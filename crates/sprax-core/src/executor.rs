@@ -101,6 +101,28 @@ impl TxExecutor {
                     });
                 }
             }
+            match msg {
+                TxMessage::RegisterValidator {
+                    consensus_pubkey,
+                    proof,
+                    self_stake,
+                    moniker,
+                } => {
+                    if consensus_pubkey.len() != 32
+                        || proof.len() != 64
+                        || self_stake.is_zero()
+                        || moniker.len() > 128
+                    {
+                        return Err(CoreError::StateError(
+                            "invalid validator registration bounds".into(),
+                        ));
+                    }
+                }
+                TxMessage::SubmitEquivocationEvidence { evidence } if evidence.len() > 4096 => {
+                    return Err(CoreError::StateError("evidence exceeds size limit".into()))
+                }
+                _ => {}
+            }
             if matches!(msg, TxMessage::Generic { .. }) {
                 return Err(CoreError::ModuleError {
                     module: "execution".into(),
@@ -200,6 +222,9 @@ impl TxExecutor {
         for msg in &tx.body.messages {
             if let TxMessage::Transfer { amount, .. }
             | TxMessage::Delegate { amount, .. }
+            | TxMessage::RegisterValidator {
+                self_stake: amount, ..
+            }
             | TxMessage::InstantiateContract { funds: amount, .. }
             | TxMessage::ContractCall { funds: amount, .. } = msg
             {
@@ -284,6 +309,11 @@ impl TxExecutor {
                     StateAccessor::set_account(store, to, &recipient_state)?;
                 }
                 TxMessage::Delegate { validator, amount } => {
+                    crate::validator_lifecycle::ensure_delegatable(
+                        store,
+                        *validator,
+                        tx.body.sender,
+                    )?;
                     // Funds already reserved out of the sender's balance above (step 4); credit
                     // them into the canonical validator/delegation ledger.
                     let mut validator_stake = StateAccessor::get_validator_stake(store, validator)?;
@@ -328,12 +358,20 @@ impl TxExecutor {
 
                     let completion_height = current_height.saturating_add(unbonding_period_blocks);
                     let entry = crate::state::UnbondingRecord {
+                        creation_height: current_height,
                         delegator: tx.body.sender,
                         validator: *validator,
                         completion_height,
                         amount: *amount,
                     };
                     StateAccessor::set_unbonding(store, &entry, tx.body.nonce)?;
+                    if tx.body.sender == *validator {
+                        crate::validator_lifecycle::check_self_bond(
+                            store,
+                            *validator,
+                            current_height,
+                        )?;
+                    }
                 }
                 TxMessage::StoreCode { wasm_bytecode } => {
                     let (id, consumed) = sprax_wasm::CosmWasmRuntime
@@ -388,6 +426,42 @@ impl TxExecutor {
                         .map_err(CoreError::ExecutionReverted)?;
                     gas.consume_gas(result.gas_used)?;
                     return_data = result.data;
+                }
+                TxMessage::RegisterValidator {
+                    consensus_pubkey,
+                    proof,
+                    self_stake,
+                    moniker,
+                } => {
+                    gas.consume_gas(50_000)?;
+                    crate::validator_lifecycle::register(
+                        store,
+                        tx.body.sender,
+                        tx.body.nonce,
+                        current_height,
+                        consensus_pubkey,
+                        proof,
+                        *self_stake,
+                        moniker,
+                    )?;
+                }
+                TxMessage::JailValidator {} => {
+                    crate::validator_lifecycle::jail(store, tx.body.sender, current_height, false)?
+                }
+                TxMessage::UnjailValidator {} => {
+                    crate::validator_lifecycle::jail(store, tx.body.sender, current_height, true)?
+                }
+                TxMessage::SubmitEquivocationEvidence { evidence } => {
+                    gas.consume_gas(30_000)?;
+                    let record = crate::validator_lifecycle::slash(
+                        store,
+                        evidence,
+                        current_height,
+                        unbonding_period_blocks,
+                        &mut gas,
+                    )?;
+                    return_data = serde_json::to_vec(&record)
+                        .map_err(|e| CoreError::StateError(e.to_string()))?;
                 }
                 TxMessage::Generic { .. } => {
                     return Err(CoreError::ModuleError {

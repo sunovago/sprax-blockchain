@@ -12,6 +12,7 @@ workspace = true
 
 [dependencies]
 sprax-types.workspace = true
+sprax-consensus.workspace = true
 sprax-crypto.workspace = true
 sprax-storage.workspace = true
 sprax-wasm.workspace = true

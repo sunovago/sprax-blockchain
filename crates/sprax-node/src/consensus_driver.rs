@@ -180,6 +180,16 @@ impl ConsensusDriver {
     }
 
     async fn run_one_height(&mut self) {
+        {
+            let ledger = self.ledger.read();
+            if let Ok(records) = ledger.validator_registry() {
+                self.evidence_pool.write().prune(
+                    ledger.height(),
+                    ledger.genesis().consensus_params.unbonding_period_blocks,
+                    &records,
+                );
+            }
+        }
         let next_height = self.ledger.read().height() + 1;
         let round = if next_height == self.last_attempted_height {
             let Some(next_round) = self.current_round.checked_add(1) else {
@@ -212,6 +222,13 @@ impl ConsensusDriver {
                 return;
             }
         };
+        if !val_set.validators().iter().any(|v| {
+            v.address == self.local_key.address()
+                && v.public_key == self.local_key.public_key_bytes()
+        }) {
+            // Inactive, jailed and tombstoned nodes still catch up over P2P, but never sign.
+            return;
+        }
         self.engine.set_validator_set(val_set);
         self.engine.start_height(next_height);
         self.engine.set_round(round);
@@ -764,10 +781,14 @@ impl ConsensusDriver {
                 vote_a: conflicting,
                 vote_b: vote.clone(),
             };
-            let recorded = self
-                .evidence_pool
-                .write()
-                .insert(evidence.clone(), self.ledger.read().genesis());
+            let recorded = {
+                let ledger = self.ledger.read();
+                self.evidence_pool.write().insert_registered(
+                    evidence.clone(),
+                    ledger.genesis(),
+                    &validator.public_key,
+                )
+            };
             if matches!(recorded, Ok(true)) {
                 warn!(validator = %vote.validator_address, "equivocation observed; economic transition requires finalized evidence processing");
                 self.p2p.broadcast_evidence(evidence);
@@ -1011,9 +1032,34 @@ pub async fn run_evidence_listener(
             break;
         };
         // Peer arrival order must never change committed state, power or jail status.
-        let result = evidence_pool
-            .write()
-            .insert(evidence, ledger.read().genesis());
+        let result = {
+            let chain = ledger.read();
+            chain
+                .validator_registry()
+                .map_err(|e| e.to_string())
+                .and_then(|records| {
+                    if evidence.height > chain.height().saturating_add(1)
+                        || chain.height().saturating_sub(evidence.height)
+                            >= chain.genesis().consensus_params.unbonding_period_blocks
+                    {
+                        return Err("evidence outside observation height window".into());
+                    }
+                    evidence_pool.write().prune(
+                        chain.height(),
+                        chain.genesis().consensus_params.unbonding_period_blocks,
+                        &records,
+                    );
+                    let validator = records
+                        .iter()
+                        .find(|v| v.operator_address == evidence.validator_address && !v.tombstoned)
+                        .ok_or_else(|| "unknown evidence signer".to_string())?;
+                    evidence_pool.write().insert_registered(
+                        evidence,
+                        chain.genesis(),
+                        &validator.consensus_pubkey,
+                    )
+                })
+        };
         match result {
             Ok(true) => {
                 warn!("peer equivocation observation retained; no canonical state mutation")
@@ -1292,6 +1338,38 @@ mod tests {
         )
         .unwrap();
         (dir, keys, identity, driver)
+    }
+
+    #[tokio::test]
+    async fn canonically_jailed_validator_does_not_sign_new_rounds() {
+        let (_dir, _keys, _identity, mut driver) = round_sync_fixture();
+        let key = &driver.local_key;
+        let body = sprax_types::TxBody {
+            chain_id: sprax_types::ChainId::new("sprax-devnet-1").unwrap(),
+            sender: key.address(),
+            nonce: 0,
+            messages: vec![sprax_types::TxMessage::JailValidator {}],
+            fee: sprax_types::TxFee::default(),
+            memo: String::new(),
+            timeout_height: 10,
+        };
+        let signature = key.sign(&body.sign_bytes().unwrap());
+        let tx = sprax_types::Transaction::new(
+            body,
+            sprax_types::KeyType::Ed25519,
+            key.public_key_bytes().to_vec(),
+            signature,
+        )
+        .unwrap();
+        {
+            let mut ledger = driver.ledger.write();
+            ledger.submit_transaction(tx).unwrap();
+            let block = ledger.mine_block(key.address()).unwrap();
+            assert_eq!(block.body.transactions.len(), 1);
+        }
+        driver.run_one_height().await;
+        assert!(driver.signing_journal.state().unwrap().is_none());
+        assert!(driver.signing_journal.latest_proposal().unwrap().is_none());
     }
 
     #[tokio::test]

@@ -49,6 +49,8 @@ fn default_unbonding_period_blocks() -> u64 {
 /// Network Consensus and Execution Parameters.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ConsensusParams {
+    #[serde(default)]
+    pub validator_policy: crate::validator_lifecycle::ValidatorPolicy,
     pub block_time_target_ms: u64,
     pub max_block_gas: u64,
     pub max_block_size_bytes: usize,
@@ -70,6 +72,7 @@ pub struct ConsensusParams {
 impl Default for ConsensusParams {
     fn default() -> Self {
         Self {
+            validator_policy: crate::validator_lifecycle::ValidatorPolicy::default(),
             block_time_target_ms: 1500,
             max_block_gas: 20_000_000,
             max_block_size_bytes: 4 * 1024 * 1024,
@@ -211,6 +214,12 @@ impl GenesisConfig {
                 "unsupported genesis height or zero block limits".into(),
             ));
         }
+        self.consensus_params.validator_policy.validate()?;
+        if self.consensus_params.unbonding_period_blocks < 2 {
+            return Err(CoreError::StateError(
+                "unbonding period must cover evidence window".into(),
+            ));
+        }
         let mut addresses = std::collections::HashSet::new();
         for account in &self.accounts {
             if !addresses.insert(account.address) {
@@ -231,13 +240,19 @@ impl GenesisConfig {
                 "genesis allocations exceed maximum supply".into(),
             ));
         }
+        if self.validators.len() > crate::validator_lifecycle::MAX_REGISTERED_VALIDATORS {
+            return Err(CoreError::StateError(
+                "validator registry capacity exceeded".into(),
+            ));
+        }
         let mut operators = std::collections::HashSet::new();
         let mut consensus_keys = std::collections::HashSet::new();
         for validator in &self.validators {
             if !operators.insert(validator.operator_address)
                 || !consensus_keys.insert(validator.consensus_pubkey.clone())
                 || validator.consensus_pubkey.len() != 32
-                || validator.self_stake == Amount::ZERO
+                || validator.self_stake < self.consensus_params.validator_policy.min_self_stake
+                || validator.moniker.len() > 128
             {
                 return Err(CoreError::StateError(
                     "invalid or duplicate genesis validator".into(),
@@ -276,6 +291,8 @@ impl GenesisConfig {
                 total_burned: Amount::ZERO,
             },
         )?;
+
+        crate::validator_lifecycle::initialize(store, self)?;
 
         // Seed each genesis validator's canonical stake so `sprax-node`'s per-height sync
         // (ConsensusDriver reading this back into `StakingKeeper`'s BFT cache) starts from the

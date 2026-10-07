@@ -42,6 +42,19 @@ pub enum TxMessage {
         funds: Amount,
         label: String,
     },
+    /// Register the sender as operator, with a genesis-bound consensus-key proof.
+    RegisterValidator {
+        consensus_pubkey: Vec<u8>,
+        proof: Vec<u8>,
+        self_stake: Amount,
+        moniker: String,
+    },
+    JailValidator {},
+    UnjailValidator {},
+    /// JSON-encoded EquivocationEvidence; bounded and verified by canonical execution.
+    SubmitEquivocationEvidence {
+        evidence: Vec<u8>,
+    },
     /// Generic extensible payload
     Generic {
         type_url: String,

@@ -47,6 +47,18 @@ TCP bytes; this does not establish recovery after socket resets, arbitrary packe
 unbounded partitions, deterministic crashes at every storage write, Byzantine operators,
 locked-value recovery under all schedules, or production load. Those launch gates remain open.
 
+## Canonical slashing and validator lifecycle
+
+The selected 5% double-sign penalty and permanent tombstone are implemented through finalized,
+reporter-signed evidence transactions. Registration, voluntary/self-bond jail, cooldown-based
+unjail, immutable key uniqueness and H+1 active-set transitions are canonical. Historical signer
+membership, supply/delegation/unbonding accounting, duplicate protection and gas rollback have
+regression coverage. Staking RPC values now come from committed ledger state.
+See [validator lifecycle](VALIDATOR_LIFECYCLE.md) for exact policy, CLI usage, bounds and limits.
+Automatic evidence submission, downtime penalties, key rotation, production parameter agreement
+and independent economic/security review remain open. This revision requires coordinated new
+genesis/state; existing data must not be reset to bypass identity checks.
+
 ## Current hardening changes
 
 - Transactions execute against an isolated storage overlay. Failed execution discards
@@ -54,8 +66,8 @@ locked-value recovery under all schedules, or production load. Those launch gate
 - Proposal construction and validation do not advance finalized height or persist state.
 - Finalized blocks commit state, block data, transaction indexes, and height in one redb
   transaction. Memory caches are updated only after that transaction succeeds.
-- Validator identities/power come from the genesis registry and committed ledger stake.
-  A block commits the active set from state at height H-1; delegation changes take effect
+- Validator identities/power come from the committed registry, eligibility and ledger stake.
+  A block commits the active set from state at height H-1; registry and stake changes take effect
   in the certificate for height H+1. Top-100 selection and ordering are deterministic.
   Commit verification, block gossip, historical catch-up, startup and validator RPCs use
   the same canonical set instead of trusting staking.json or an in-memory staking cache.
@@ -65,8 +77,8 @@ locked-value recovery under all schedules, or production load. Those launch gate
   This replaces the earlier DWRR schedule and requires a coordinated protocol upgrade.
 - Signed equivocation observations are bounded/deduplicated in a local memory pool. Peer
   arrival never changes stake, jail status, state root or consensus power. The unsafe direct
-  ledger slash API was removed. Finalized, chain-bound economic evidence processing remains
-  unfinished; the observation pool is not persistent and does not implement slashing.
+  ledger slash API was removed. Finalized, chain-bound economic evidence processing is implemented via reporter transactions;
+  the observation pool itself is not persistent and never applies a penalty.
 - Vote signatures use the `sprax/vote/v2` domain and include the exact genesis fingerprint,
   validator address, step, height, round and optional block hash. Nil votes, certificates and
   equivocation observations cannot be reused on another genesis. Old wire votes without
@@ -224,9 +236,10 @@ verify the chain changes above or a live deployment.
    pagination beyond the configured scan limits remains a future capability.
 3. Complete and test BFT round synchronization, future-proposal recovery and multi-validator locked proposal recovery,
    reproposal/catch-up after restart, commit validation during historical catch-up,
-   and complete validator registration/jail/tombstone transitions and canonical slashing.
+   and adversarial multi-operator validator lifecycle/slashing transitions. Canonical registration,
+   jail/tombstone and slashing are implemented; downtime penalties remain out of scope.
    Delegation-driven power commitments and sequential certificate catch-up are implemented;
-   peer observations are quarantined and have no economic effect.
+   peer observations are quarantined; only finalized evidence transactions apply economic effects.
 4. Exercise three or more active validators through partitions, Byzantine input, proposer
    failures, abrupt process crashes, catch-up, and sustained load. The four-active-validator
    restart/quorum-outage and process-partition/crash scenarios above are narrower than this

@@ -287,7 +287,27 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         StateAccessor::get_delegation(&self.store, delegator, validator)
     }
 
-    /// Derives consensus power solely from committed stake and the genesis registry.
+    pub fn canonical_delegations(
+        &self,
+        delegator: &Address,
+    ) -> Result<Vec<(Address, crate::state::DelegationState)>, CoreError> {
+        StateAccessor::delegations_for(&self.store, delegator)
+    }
+    pub fn canonical_unbonding_count(&self, delegator: &Address) -> Result<usize, CoreError> {
+        Ok(self
+            .store
+            .scan_prefix(&StateAccessor::delegator_unbonding_prefix(delegator))
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .len())
+    }
+
+    pub fn validator_registry(
+        &self,
+    ) -> Result<Vec<crate::validator_lifecycle::ValidatorRecord>, CoreError> {
+        crate::validator_lifecycle::registry(&self.store)
+    }
+
+    /// Derives consensus power solely from committed registry, eligibility and stake.
     pub fn active_validators(&self) -> Result<Vec<sprax_types::CanonicalValidator>, CoreError> {
         crate::validator_set::canonical_validator_set(&self.genesis, &self.store)
     }
@@ -414,6 +434,15 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
                 .map_err(|e| CoreError::StateError(e.to_string()))?;
             StateAccessor::set_account(&self.store, &entry.delegator, &delegator_state)?;
             self.store
+                .delete(&StateAccessor::delegator_unbonding_index_key(
+                    &entry.delegator,
+                    &key,
+                ))
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            self.store
+                .delete(&StateAccessor::unbonding_index_key(&entry.validator, &key))
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            self.store
                 .delete(&key)
                 .map_err(|e| CoreError::StateError(e.to_string()))?;
         }
@@ -512,6 +541,13 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
                 "block limit cannot fit validator certificate".into(),
             ));
         }
+
+        crate::validator_lifecycle::record_active_set(
+            &self.store,
+            current_height,
+            self.genesis.consensus_params.unbonding_period_blocks,
+            &self.active_validators()?,
+        )?;
 
         for tx in pending_txs {
             let bytes = serde_json::to_vec(&tx)
@@ -691,6 +727,13 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
                 ),
             });
         }
+
+        crate::validator_lifecycle::record_active_set(
+            &self.store,
+            block_height,
+            self.genesis.consensus_params.unbonding_period_blocks,
+            &self.active_validators()?,
+        )?;
 
         // 5. Execute all transactions in the block
         let mut tx_hashes = Vec::with_capacity(block.body.transactions.len());

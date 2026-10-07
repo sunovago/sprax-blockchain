@@ -94,7 +94,8 @@ impl RpcServerHandle {
 }
 
 impl RpcServer {
-    fn router(node: NodeService) -> Router {
+    /// Build the same RPC routes used by the listener, for embedding and integration verification.
+    pub fn router(node: NodeService) -> Router {
         let state = Arc::new(RpcServerState { node });
 
         let cors = CorsLayer::new()
@@ -354,6 +355,18 @@ async fn handle_json_rpc(
             }
         }
 
+        "sprax_getEquivocationEvidence" => {
+            JsonRpcResponse::success(id, json!(state.node.observed_evidence()))
+        }
+        "sprax_getValidatorPolicy" => match state.node.validator_policy_info() {
+            Ok(info) => JsonRpcResponse::success(id, info),
+            Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+        },
+        "sprax_getValidatorRegistry" => match state.node.validator_registry() {
+            Ok(records) => JsonRpcResponse::success(id, json!(records)),
+            Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+        },
+
         "sprax_getValidators" => {
             let val_set_res = state.node.canonical_validator_set();
             match val_set_res {
@@ -386,21 +399,10 @@ async fn handle_json_rpc(
                 .unwrap_or("");
 
             match parse_address(addr_str) {
-                Some(addr) => {
-                    let delegations = state.node.staking().read().get_delegator_delegations(addr);
-                    let vals: Vec<Value> = delegations
-                        .into_iter()
-                        .map(|d| {
-                            json!({
-                                "delegator": d.delegator_address.to_hex(),
-                                "validator": d.validator_address.to_hex(),
-                                "shares": d.shares.to_string(),
-                                "balance": d.balance.to_string(),
-                            })
-                        })
-                        .collect();
-                    JsonRpcResponse::success(id, json!(vals))
-                }
+                Some(addr) => match state.node.canonical_delegations(&addr) {
+                    Ok(value) => JsonRpcResponse::success(id, value),
+                    Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+                },
                 None => {
                     JsonRpcResponse::error(id, -32602, "Invalid address format".to_string(), None)
                 }
@@ -417,27 +419,10 @@ async fn handle_json_rpc(
                 .unwrap_or("");
 
             match parse_address(addr_str) {
-                Some(addr) => {
-                    let staking_arc = state.node.staking();
-                    let staking_guard = staking_arc.read();
-                    let validator = staking_guard.get_validator(&addr);
-                    let delegations = staking_guard.get_delegator_delegations(addr);
-                    let unbonding = staking_guard.get_unbonding_entries(&addr);
-
-                    let result = json!({
-                        "address": addr.to_hex(),
-                        "isValidator": validator.is_some(),
-                        "validator": validator.map(|v| json!({
-                            "operatorAddress": v.operator_address.to_hex(),
-                            "tokens": v.tokens.to_string(),
-                            "status": format!("{:?}", v.status),
-                            "moniker": v.description.moniker,
-                        })),
-                        "delegationsCount": delegations.len(),
-                        "unbondingCount": unbonding.len(),
-                    });
-                    JsonRpcResponse::success(id, result)
-                }
+                Some(addr) => match state.node.canonical_staking_info(&addr) {
+                    Ok(value) => JsonRpcResponse::success(id, value),
+                    Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+                },
                 None => {
                     JsonRpcResponse::error(id, -32602, "Invalid address format".to_string(), None)
                 }

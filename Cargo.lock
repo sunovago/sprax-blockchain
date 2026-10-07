@@ -2949,6 +2949,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "serde_json",
+ "sprax-consensus",
  "sprax-crypto",
  "sprax-storage",
  "sprax-types",

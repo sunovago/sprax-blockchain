@@ -129,3 +129,124 @@ fn historical_catchup_uses_each_committed_stake_transition_and_ignores_local_cac
         b"corrupt untrusted cache"
     );
 }
+
+#[tokio::test]
+async fn finalized_slashing_catchup_and_disk_reopen_use_the_new_active_set() {
+    let alice = Ed25519Keypair::from_seed(&[91; 32]);
+    let bob = Ed25519Keypair::from_seed(&[92; 32]);
+    let mut genesis = GenesisConfig::default_development();
+    genesis.accounts = [&alice, &bob]
+        .iter()
+        .map(|k| GenesisAccount {
+            name: "validator".into(),
+            address: k.address(),
+            initial_balance: Amount::from_sprx_whole(1000).unwrap(),
+        })
+        .collect();
+    genesis.validators = [&alice, &bob]
+        .iter()
+        .map(|k| GenesisValidator {
+            operator_address: k.address(),
+            consensus_pubkey: k.public_key_bytes().to_vec(),
+            self_stake: Amount::from_sprx_whole(100).unwrap(),
+            moniker: "validator".into(),
+        })
+        .collect();
+    let identity = genesis.fingerprint().unwrap();
+    let home = tempfile::tempdir().unwrap();
+    genesis
+        .save_to_file(&home.path().join("genesis.json"))
+        .unwrap();
+    let node = NodeService::new_or_load(home.path().to_path_buf()).unwrap();
+    let mut producer = ChainLedger::init_from_genesis(genesis).unwrap();
+    let mut first = producer.mine_block(bob.address()).unwrap();
+    certify(&mut first, &[&alice, &bob], identity);
+    let sign = |value| {
+        let mut vote = Vote::new(
+            identity,
+            VoteType::Precommit,
+            1,
+            0,
+            Some(sprax_types::Hash32::new([value; 32])),
+            alice.address(),
+            vec![],
+        );
+        vote.signature = alice.sign(&vote.sign_bytes().unwrap());
+        vote
+    };
+    let evidence = sprax_consensus::EquivocationEvidence {
+        validator_address: alice.address(),
+        height: 1,
+        round: 0,
+        vote_a: sign(1),
+        vote_b: sign(2),
+    };
+    let body = TxBody {
+        chain_id: ChainId::new("sprax-devnet-1").unwrap(),
+        sender: bob.address(),
+        nonce: 0,
+        messages: vec![TxMessage::SubmitEquivocationEvidence {
+            evidence: serde_json::to_vec(&evidence).unwrap(),
+        }],
+        fee: TxFee::default(),
+        memo: String::new(),
+        timeout_height: 20,
+    };
+    let sig = bob.sign(&body.sign_bytes().unwrap());
+    producer
+        .submit_transaction(
+            Transaction::new(body, KeyType::Ed25519, bob.public_key_bytes().to_vec(), sig).unwrap(),
+        )
+        .unwrap();
+    let mut slash = producer.mine_block(bob.address()).unwrap();
+    assert_eq!(slash.body.transactions.len(), 1);
+    certify(&mut slash, &[&alice, &bob], identity);
+    let mut after = producer.mine_block(bob.address()).unwrap();
+    certify(&mut after, &[&bob], identity);
+    node.apply_blocks_batch(vec![first, slash, after]).unwrap();
+    assert_eq!(node.canonical_validator_set().unwrap().len(), 1);
+    assert!(
+        node.validator_registry()
+            .unwrap()
+            .iter()
+            .find(|v| v.operator_address == alice.address())
+            .unwrap()
+            .tombstoned
+    );
+    let expected_root = node.latest_header().state_root;
+    drop(node);
+    let reopened = NodeService::new_or_load(home.path().to_path_buf()).unwrap();
+    assert_eq!(reopened.latest_header().state_root, expected_root);
+    assert_eq!(
+        reopened.canonical_validator_set().unwrap().validators()[0].address,
+        bob.address()
+    );
+    use tower::ServiceExt;
+    let router = sprax_node::rpc_server::RpcServer::router(reopened.clone());
+    for method in [
+        "sprax_getStaking",
+        "sprax_getDelegations",
+        "sprax_getValidatorPolicy",
+    ] {
+        let response = router.clone().oneshot(axum::http::Request::builder().uri("/").method("POST").header("content-type", "application/json").body(axum::body::Body::from(serde_json::json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": [alice.address().to_hex()] }).to_string())).unwrap()).await.unwrap();
+        let bytes = axum::body::to_bytes(response.into_body(), 65536)
+            .await
+            .unwrap();
+        let value: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert!(value.get("error").is_none(), "{value}");
+        match method {
+            "sprax_getStaking" => {
+                assert_eq!(value["result"]["validator"]["status"], "Tombstoned");
+                assert_eq!(
+                    value["result"]["validator"]["tokens"],
+                    Amount::from_sprx_whole(95).unwrap().to_string()
+                );
+            }
+            "sprax_getDelegations" => assert_eq!(
+                value["result"][0]["balance"],
+                Amount::from_sprx_whole(95).unwrap().to_string()
+            ),
+            _ => assert_eq!(value["result"]["policy"]["double_sign_slash_bps"], 500),
+        }
+    }
+}

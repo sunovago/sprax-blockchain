@@ -20,8 +20,43 @@ impl EvidencePool {
     }
     pub fn insert(
         &mut self,
+        evidence: EquivocationEvidence,
+        genesis: &GenesisConfig,
+    ) -> Result<bool, String> {
+        let validator = genesis
+            .validators
+            .iter()
+            .find(|v| v.operator_address == evidence.validator_address)
+            .ok_or_else(|| "evidence signer is not in the genesis registry".to_string())?;
+        self.insert_registered(evidence, genesis, &validator.consensus_pubkey)
+    }
+    pub fn prune(
+        &mut self,
+        height: u64,
+        period: u64,
+        records: &[sprax_core::validator_lifecycle::ValidatorRecord],
+    ) {
+        self.observations.retain(|_, evidence| {
+            evidence.height <= height.saturating_add(1)
+                && height.saturating_sub(evidence.height) < period
+                && records
+                    .iter()
+                    .any(|v| v.operator_address == evidence.validator_address && !v.tombstoned)
+        });
+    }
+    pub fn observations(&self) -> Vec<EquivocationEvidence> {
+        let mut sorted: Vec<_> = self.observations.iter().collect();
+        sorted.sort_by_key(|(id, _)| **id);
+        sorted
+            .into_iter()
+            .map(|(_, evidence)| evidence.clone())
+            .collect()
+    }
+    pub fn insert_registered(
+        &mut self,
         mut evidence: EquivocationEvidence,
         genesis: &GenesisConfig,
+        public_key: &[u8],
     ) -> Result<bool, String> {
         let expected = genesis.fingerprint().map_err(|e| e.to_string())?;
         if evidence.vote_a.genesis != expected || evidence.vote_b.genesis != expected {
@@ -30,13 +65,8 @@ impl EvidencePool {
         if evidence.vote_a.signature.len() != 64 || evidence.vote_b.signature.len() != 64 {
             return Err("invalid evidence signature length".into());
         }
-        let validator = genesis
-            .validators
-            .iter()
-            .find(|v| v.operator_address == evidence.validator_address)
-            .ok_or_else(|| "evidence signer is not in the genesis registry".to_string())?;
         evidence
-            .verify_signatures(&validator.consensus_pubkey)
+            .verify_signatures(public_key)
             .map_err(|e| e.to_string())?;
         let a = serde_json::to_vec(&evidence.vote_a).map_err(|e| e.to_string())?;
         let b = serde_json::to_vec(&evidence.vote_b).map_err(|e| e.to_string())?;
@@ -131,5 +161,39 @@ mod tests {
         assert!(pool.insert(mixed, &g).is_err());
         assert!(pool.is_empty());
         assert!(pool.insert(e, &g).unwrap());
+    }
+    #[test]
+    fn registered_non_genesis_signers_are_observable_and_expired_tombstones_are_pruned() {
+        let (mut genesis, mut evidence) = fixture(0);
+        let key = Ed25519Keypair::from_seed(&[79; 32]);
+        genesis.validators.clear();
+        for vote in [&mut evidence.vote_a, &mut evidence.vote_b] {
+            vote.genesis = genesis.fingerprint().unwrap();
+            vote.signature = key.sign(&vote.sign_bytes().unwrap());
+        }
+        let mut pool = EvidencePool::default();
+        assert!(pool.insert(evidence.clone(), &genesis).is_err());
+        assert!(pool
+            .insert_registered(evidence.clone(), &genesis, &key.public_key_bytes())
+            .unwrap());
+        let mut records = vec![sprax_core::validator_lifecycle::ValidatorRecord {
+            operator_address: key.address(),
+            consensus_pubkey: key.public_key_bytes().to_vec(),
+            moniker: "registered".into(),
+            registered_height: 0,
+            jailed: false,
+            jailed_until: 0,
+            tombstoned: false,
+        }];
+        pool.prune(2, 10, &records);
+        assert_eq!(pool.len(), 1);
+        records[0].tombstoned = true;
+        pool.prune(2, 10, &records);
+        assert!(pool.is_empty());
+        records[0].tombstoned = false;
+        pool.insert_registered(evidence, &genesis, &key.public_key_bytes())
+            .unwrap();
+        pool.prune(11, 10, &records);
+        assert!(pool.is_empty());
     }
 }

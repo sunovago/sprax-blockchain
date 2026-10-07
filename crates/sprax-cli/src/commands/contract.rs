@@ -58,7 +58,7 @@ enum ContractCommand {
     },
 }
 
-fn rpc(url: &str, method: &str, params: Value) -> anyhow::Result<Value> {
+pub(super) fn rpc(url: &str, method: &str, params: Value) -> anyhow::Result<Value> {
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(30))
         .build();
