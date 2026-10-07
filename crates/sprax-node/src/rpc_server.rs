@@ -75,8 +75,27 @@ impl JsonRpcResponse {
 #[derive(Debug)]
 pub struct RpcServer;
 
+#[derive(Debug)]
+pub struct RpcServerHandle {
+    shutdown: tokio::sync::oneshot::Sender<()>,
+    task: tokio::task::JoinHandle<()>,
+}
+impl RpcServerHandle {
+    pub async fn stop(mut self) {
+        let _ = self.shutdown.send(());
+        if tokio::time::timeout(std::time::Duration::from_secs(5), &mut self.task)
+            .await
+            .is_err()
+        {
+            self.task.abort();
+            let _ = self.task.await;
+        }
+    }
+}
+
 impl RpcServer {
-    pub async fn start(node: NodeService, port: u16) -> Result<(), NodeError> {
+    /// Build the same RPC routes used by the listener, for embedding and integration verification.
+    pub fn router(node: NodeService) -> Router {
         let state = Arc::new(RpcServerState { node });
 
         let cors = CorsLayer::new()
@@ -88,7 +107,7 @@ impl RpcServer {
                 header::ACCEPT,
             ]);
 
-        let app = Router::new()
+        Router::new()
             // JSON-RPC entry points
             .route("/", post(handle_json_rpc))
             .route("/rpc", post(handle_json_rpc))
@@ -102,7 +121,11 @@ impl RpcServer {
             .route("/blocks/latest", get(handle_rest_latest_block))
             .route("/blocks/:height_or_hash", get(handle_rest_get_block))
             .layer(cors)
-            .with_state(state);
+            .with_state(state)
+    }
+
+    pub async fn start(node: NodeService, port: u16) -> Result<RpcServerHandle, NodeError> {
+        let app = Self::router(node);
 
         let addr = SocketAddr::from(([0, 0, 0, 0], port));
         let listener = tokio::net::TcpListener::bind(addr).await.map_err(|e| {
@@ -111,13 +134,19 @@ impl RpcServer {
 
         info!("SPRX JSON-RPC & REST HTTP Server listening on http://0.0.0.0:{port}");
 
-        tokio::spawn(async move {
-            if let Err(e) = axum::serve(listener, app).await {
+        let (shutdown, stopped) = tokio::sync::oneshot::channel();
+        let task = tokio::spawn(async move {
+            if let Err(e) = axum::serve(listener, app)
+                .with_graceful_shutdown(async {
+                    let _ = stopped.await;
+                })
+                .await
+            {
                 error!("RPC server error: {e}");
             }
         });
 
-        Ok(())
+        Ok(RpcServerHandle { shutdown, task })
     }
 }
 
@@ -137,9 +166,7 @@ async fn handle_json_rpc(
             let metrics = state.node.metrics();
             let val_count = state
                 .node
-                .staking()
-                .read()
-                .get_active_validator_set()
+                .canonical_validator_set()
                 .map(|vs| vs.validators().len())
                 .unwrap_or(0);
 
@@ -328,8 +355,20 @@ async fn handle_json_rpc(
             }
         }
 
+        "sprax_getEquivocationEvidence" => {
+            JsonRpcResponse::success(id, json!(state.node.observed_evidence()))
+        }
+        "sprax_getValidatorPolicy" => match state.node.validator_policy_info() {
+            Ok(info) => JsonRpcResponse::success(id, info),
+            Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+        },
+        "sprax_getValidatorRegistry" => match state.node.validator_registry() {
+            Ok(records) => JsonRpcResponse::success(id, json!(records)),
+            Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+        },
+
         "sprax_getValidators" => {
-            let val_set_res = state.node.staking().read().get_active_validator_set();
+            let val_set_res = state.node.canonical_validator_set();
             match val_set_res {
                 Ok(val_set) => {
                     let vals: Vec<Value> = val_set
@@ -360,21 +399,10 @@ async fn handle_json_rpc(
                 .unwrap_or("");
 
             match parse_address(addr_str) {
-                Some(addr) => {
-                    let delegations = state.node.staking().read().get_delegator_delegations(addr);
-                    let vals: Vec<Value> = delegations
-                        .into_iter()
-                        .map(|d| {
-                            json!({
-                                "delegator": d.delegator_address.to_hex(),
-                                "validator": d.validator_address.to_hex(),
-                                "shares": d.shares.to_string(),
-                                "balance": d.balance.to_string(),
-                            })
-                        })
-                        .collect();
-                    JsonRpcResponse::success(id, json!(vals))
-                }
+                Some(addr) => match state.node.canonical_delegations(&addr) {
+                    Ok(value) => JsonRpcResponse::success(id, value),
+                    Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+                },
                 None => {
                     JsonRpcResponse::error(id, -32602, "Invalid address format".to_string(), None)
                 }
@@ -391,33 +419,82 @@ async fn handle_json_rpc(
                 .unwrap_or("");
 
             match parse_address(addr_str) {
-                Some(addr) => {
-                    let staking_arc = state.node.staking();
-                    let staking_guard = staking_arc.read();
-                    let validator = staking_guard.get_validator(&addr);
-                    let delegations = staking_guard.get_delegator_delegations(addr);
-                    let unbonding = staking_guard.get_unbonding_entries(&addr);
-
-                    let result = json!({
-                        "address": addr.to_hex(),
-                        "isValidator": validator.is_some(),
-                        "validator": validator.map(|v| json!({
-                            "operatorAddress": v.operator_address.to_hex(),
-                            "tokens": v.tokens.to_string(),
-                            "status": format!("{:?}", v.status),
-                            "moniker": v.description.moniker,
-                        })),
-                        "delegationsCount": delegations.len(),
-                        "unbondingCount": unbonding.len(),
-                    });
-                    JsonRpcResponse::success(id, result)
-                }
+                Some(addr) => match state.node.canonical_staking_info(&addr) {
+                    Ok(value) => JsonRpcResponse::success(id, value),
+                    Err(error) => JsonRpcResponse::error(id, -32000, error.to_string(), None),
+                },
                 None => {
                     JsonRpcResponse::error(id, -32602, "Invalid address format".to_string(), None)
                 }
             }
         }
 
+        "sprax_queryContract" => {
+            let params = req.params.as_ref().and_then(Value::as_array);
+            let address = params
+                .and_then(|p| p.first())
+                .and_then(Value::as_str)
+                .and_then(parse_address);
+            let message = params.and_then(|p| p.get(1));
+            let gas = params
+                .and_then(|p| p.get(2))
+                .and_then(Value::as_u64)
+                .unwrap_or(200_000);
+            if gas == 0 || gas > 200_000 {
+                return Json(JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "query gas must be between 1 and 200000".into(),
+                    None,
+                ));
+            }
+            match (address, message) {
+                (Some(address), Some(message)) => {
+                    static LIMIT: std::sync::OnceLock<Arc<tokio::sync::Semaphore>> =
+                        std::sync::OnceLock::new();
+                    let limiter = LIMIT
+                        .get_or_init(|| Arc::new(tokio::sync::Semaphore::new(2)))
+                        .clone();
+                    let permit = match limiter.try_acquire_owned() {
+                        Ok(p) => p,
+                        Err(_) => {
+                            return Json(JsonRpcResponse::error(
+                                id,
+                                -32000,
+                                "contract query capacity reached".into(),
+                                None,
+                            ))
+                        }
+                    };
+                    let bytes =
+                        serde_json::to_vec(message).expect("JSON value serialization cannot fail");
+                    let node = state.node.clone();
+                    match tokio::task::spawn_blocking(move || {
+                        let _permit = permit;
+                        node.query_contract(address, &bytes, gas)
+                    })
+                    .await
+                    {
+                        Ok(Ok((data, gas_used))) => {
+                            JsonRpcResponse::success(id, json!({"data":data,"gasUsed":gas_used}))
+                        }
+                        Ok(Err(e)) => JsonRpcResponse::error(id, -32000, e.to_string(), None),
+                        Err(_) => JsonRpcResponse::error(
+                            id,
+                            -32603,
+                            "contract query worker failed".into(),
+                            None,
+                        ),
+                    }
+                }
+                _ => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "expected [contract_address, query_object, optional_gas]".into(),
+                    None,
+                ),
+            }
+        }
         _ => JsonRpcResponse::error(id, -32601, format!("Method not found: {method}"), None),
     };
 
@@ -461,7 +538,7 @@ async fn handle_account_balance(
             StatusCode::OK,
             Json(json!({
                 "address": address_str,
-                "balance_atto": acc.balance.to_string(),
+                "balance_atto": acc.balance.as_atto().to_string(),
                 "nonce": acc.nonce,
             })),
         ),
@@ -622,12 +699,7 @@ async fn handle_rest_get_block(
 // ==========================================
 
 fn parse_address(s: &str) -> Option<Address> {
-    let s = s.trim();
-    if s.starts_with("sprx") {
-        Address::from_bech32(s).ok()
-    } else {
-        Address::from_hex(s).ok()
-    }
+    Address::parse(s.trim()).ok()
 }
 
 fn parse_transaction(val: Value) -> Result<Transaction, String> {
@@ -769,6 +841,112 @@ fn parse_bytes_field(val: Option<&Value>) -> Result<Vec<u8>, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tower::ServiceExt;
+
+    #[tokio::test]
+    async fn wallet_rest_routes_accept_sdk_envelopes_and_report_atomic_balances() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/wallet-transactions.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let tx = parse_transaction(fixture["signed"].clone()).unwrap();
+            let dir = tempfile::tempdir().unwrap();
+            let mut genesis = sprax_core::GenesisConfig::default_development();
+            genesis.accounts.push(sprax_core::GenesisAccount {
+                name: "SDK sender".into(),
+                address: tx.body.sender,
+                initial_balance: Amount::from_sprx_whole(10).unwrap(),
+            });
+            genesis
+                .save_to_file(&dir.path().join("genesis.json"))
+                .unwrap();
+            let node = NodeService::new_or_load(dir.path().to_path_buf()).unwrap();
+            let router = RpcServer::router(node.clone());
+            let request = axum::http::Request::builder()
+                .method("POST")
+                .uri("/txs/broadcast")
+                .header("content-type", "application/json")
+                .body(axum::body::Body::from(
+                    serde_json::to_vec(&fixture["signed"]).unwrap(),
+                ))
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let accepted: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(accepted["success"], true);
+            node.mine_block(Address::ZERO).unwrap();
+            let receiver = match tx.body.messages[0] {
+                TxMessage::Transfer { to, .. } => to,
+                _ => panic!("transfer fixture"),
+            };
+            let request = axum::http::Request::builder()
+                .uri(format!("/accounts/{receiver}/balance"))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = router.clone().oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 4096)
+                .await
+                .unwrap();
+            let balance: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(balance["balance_atto"], "1000000000000000001");
+            let request = axum::http::Request::builder()
+                .uri(format!("/txs/{}", accepted["tx_hash"].as_str().unwrap()))
+                .body(axum::body::Body::empty())
+                .unwrap();
+            let response = router.oneshot(request).await.unwrap();
+            assert_eq!(response.status(), StatusCode::OK);
+            let bytes = axum::body::to_bytes(response.into_body(), 16384)
+                .await
+                .unwrap();
+            let receipt: Value = serde_json::from_slice(&bytes).unwrap();
+            assert_eq!(receipt["receipt"]["success"], true);
+        }
+    }
+
+    #[test]
+    fn wallet_sdk_signatures_execute_on_the_rust_ledger() {
+        let fixtures: Vec<Value> = serde_json::from_str(include_str!(
+            "../../../contracts/fixtures/wallet-transactions.json"
+        ))
+        .unwrap();
+        for fixture in fixtures {
+            let tx = parse_transaction(fixture["signed"].clone()).unwrap();
+            let expected: Vec<u8> = serde_json::from_value(fixture["sign_bytes"].clone()).unwrap();
+            assert_eq!(
+                tx.sign_bytes().unwrap(),
+                expected,
+                "SDK signing bytes must match Rust serialization"
+            );
+            assert_eq!(
+                parse_address(&tx.body.sender.to_bech32().unwrap()),
+                Some(tx.body.sender)
+            );
+            let mut genesis = sprax_core::GenesisConfig::default_development();
+            genesis.accounts.push(sprax_core::GenesisAccount {
+                name: "SDK sender".into(),
+                address: tx.body.sender,
+                initial_balance: Amount::from_sprx_whole(10).unwrap(),
+            });
+            let mut ledger = sprax_core::ChainLedger::init_from_genesis(genesis).unwrap();
+            ledger.submit_transaction(tx.clone()).unwrap();
+            let block = ledger.mine_block(Address::ZERO).unwrap();
+            assert_eq!(block.body.transactions.len(), 1);
+            let recipient = match tx.body.messages[0] {
+                TxMessage::Transfer { to, .. } => to,
+                _ => panic!("fixture must transfer funds"),
+            };
+            assert_eq!(
+                ledger.get_account(&recipient).unwrap().balance.as_atto(),
+                1_000_000_000_000_000_001
+            );
+            assert_eq!(ledger.get_account(&tx.body.sender).unwrap().nonce, 1);
+        }
+    }
 
     #[tokio::test]
     async fn test_json_rpc_status_and_account_handlers() {

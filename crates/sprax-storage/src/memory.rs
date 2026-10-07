@@ -34,9 +34,50 @@ impl MemKVStore {
 }
 
 impl ReadonlyKVStore for MemKVStore {
+    fn scan_range_bounded(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let guard = self.inner.read();
+        let mut pairs = Vec::new();
+        let mut bytes = 0usize;
+        for (key, value) in guard.range(start.to_vec()..) {
+            if end.is_some_and(|end| key.as_slice() >= end) {
+                break;
+            }
+            bytes = bytes.saturating_add(key.len()).saturating_add(value.len());
+            if pairs.len() >= max_records || bytes > max_bytes {
+                return Err(StorageError::DatabaseError(
+                    "scan resource limit exceeded".into(),
+                ));
+            }
+            pairs.push((key.clone(), value.clone()));
+        }
+        Ok(pairs)
+    }
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         let guard = self.inner.read();
         Ok(guard.get(key).cloned())
+    }
+
+    fn scan_range(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let guard = self.inner.read();
+        let iter = guard.range(start.to_vec()..);
+        let pairs = match end {
+            Some(end) => iter
+                .take_while(|(k, _)| k.as_slice() < end)
+                .map(|(k, v)| (k.clone(), v.clone()))
+                .collect(),
+            None => iter.map(|(k, v)| (k.clone(), v.clone())).collect(),
+        };
+        Ok(pairs)
     }
 }
 
@@ -94,6 +135,29 @@ const BLOCK_HASH_PREFIX: &[u8] = b"blkhash:";
 const TX_PREFIX: &[u8] = b"tx:";
 
 impl ChainMetaStore for MemKVStore {
+    fn commit_chain_batch(&self, batch: crate::ChainWriteBatch) -> Result<(), StorageError> {
+        let mut state = self.inner.write();
+        let mut meta = self.meta.write();
+        for (k, v) in batch.state.puts {
+            state.insert(k, v);
+        }
+        for k in batch.state.deletes {
+            state.remove(&k);
+        }
+        for (h, bytes) in batch.blocks {
+            meta.insert(u64_key(BLOCK_PREFIX, h), bytes);
+        }
+        for (hash, h) in batch.block_hashes {
+            meta.insert(hash_key(BLOCK_HASH_PREFIX, hash), h.to_be_bytes().to_vec());
+        }
+        for (hash, bytes) in batch.transactions {
+            meta.insert(hash_key(TX_PREFIX, hash), bytes);
+        }
+        if let Some(h) = batch.height {
+            meta.insert(HEIGHT_KEY.to_vec(), h.to_be_bytes().to_vec());
+        }
+        Ok(())
+    }
     fn put_height(&self, height: u64) -> Result<(), StorageError> {
         self.meta
             .write()
@@ -180,6 +244,23 @@ mod tests {
         assert_eq!(
             store.get(b"account:charlie").unwrap(),
             Some(b"250".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_mem_kv_store_scan_prefix() {
+        let store = MemKVStore::new();
+        store.set(b"c:aaa:k1", b"v1").unwrap();
+        store.set(b"c:aaa:k2", b"v2").unwrap();
+        store.set(b"c:bbb:k1", b"other").unwrap();
+
+        let scanned = store.scan_prefix(b"c:aaa:").unwrap();
+        assert_eq!(
+            scanned,
+            vec![
+                (b"c:aaa:k1".to_vec(), b"v1".to_vec()),
+                (b"c:aaa:k2".to_vec(), b"v2".to_vec()),
+            ]
         );
     }
 

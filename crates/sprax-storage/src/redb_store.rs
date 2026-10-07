@@ -95,6 +95,35 @@ impl RedbStore {
 }
 
 impl ReadonlyKVStore for RedbStore {
+    fn scan_range_bounded(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let read_txn = self.db.begin_read().map_err(db_err)?;
+        let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;
+        let range = match end {
+            Some(end) => table.range(start..end).map_err(db_err)?,
+            None => table.range(start..).map_err(db_err)?,
+        };
+        let mut pairs = Vec::new();
+        let mut bytes = 0usize;
+        for item in range {
+            let (key, value) = item.map_err(db_err)?;
+            bytes = bytes
+                .saturating_add(key.value().len())
+                .saturating_add(value.value().len());
+            if pairs.len() >= max_records || bytes > max_bytes {
+                return Err(StorageError::DatabaseError(
+                    "scan resource limit exceeded".into(),
+                ));
+            }
+            pairs.push((key.value().to_vec(), value.value().to_vec()));
+        }
+        Ok(pairs)
+    }
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         let read_txn = self.db.begin_read().map_err(db_err)?;
         let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;
@@ -102,6 +131,25 @@ impl ReadonlyKVStore for RedbStore {
             .get(key)
             .map_err(db_err)?
             .map(|guard| guard.value().to_vec()))
+    }
+
+    fn scan_range(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let read_txn = self.db.begin_read().map_err(db_err)?;
+        let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;
+        let mut out = Vec::new();
+        let range = match end {
+            Some(end) => table.range(start..end).map_err(db_err)?,
+            None => table.range(start..).map_err(db_err)?,
+        };
+        for item in range {
+            let (k, v) = item.map_err(db_err)?;
+            out.push((k.value().to_vec(), v.value().to_vec()));
+        }
+        Ok(out)
     }
 }
 
@@ -157,6 +205,39 @@ impl StateCommitment for RedbStore {
 }
 
 impl ChainMetaStore for RedbStore {
+    fn commit_chain_batch(&self, batch: crate::ChainWriteBatch) -> Result<(), StorageError> {
+        let txn = self.db.begin_write().map_err(db_err)?;
+        {
+            let mut state = txn.open_table(STATE_TABLE).map_err(db_err)?;
+            for (k, v) in batch.state.puts {
+                state.insert(k.as_slice(), v.as_slice()).map_err(db_err)?;
+            }
+            for k in batch.state.deletes {
+                state.remove(k.as_slice()).map_err(db_err)?;
+            }
+            let mut meta = txn.open_table(CHAIN_META_TABLE).map_err(db_err)?;
+            for (h, bytes) in batch.blocks {
+                meta.insert(u64_key(BLOCK_PREFIX, h).as_slice(), bytes.as_slice())
+                    .map_err(db_err)?;
+            }
+            for (hash, h) in batch.block_hashes {
+                meta.insert(
+                    hash_key(BLOCK_HASH_PREFIX, hash).as_slice(),
+                    h.to_be_bytes().as_slice(),
+                )
+                .map_err(db_err)?;
+            }
+            for (hash, bytes) in batch.transactions {
+                meta.insert(hash_key(TX_PREFIX, hash).as_slice(), bytes.as_slice())
+                    .map_err(db_err)?;
+            }
+            if let Some(h) = batch.height {
+                meta.insert(HEIGHT_KEY, h.to_be_bytes().as_slice())
+                    .map_err(db_err)?;
+            }
+        }
+        txn.commit().map_err(db_err)
+    }
     fn put_height(&self, height: u64) -> Result<(), StorageError> {
         let write_txn = self.db.begin_write().map_err(db_err)?;
         {
@@ -275,6 +356,42 @@ mod tests {
         assert_eq!(
             store.get(b"account:charlie").unwrap(),
             Some(b"250".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_redb_store_scan_prefix() {
+        let (store, _dir) = temp_store();
+        store.set(b"c:aaa:k1", b"v1").unwrap();
+        store.set(b"c:aaa:k2", b"v2").unwrap();
+        store.set(b"c:bbb:k1", b"other").unwrap();
+        store.set(b"c:aab:k1", b"boundary").unwrap();
+
+        let scanned = store.scan_prefix(b"c:aaa:").unwrap();
+        assert_eq!(
+            scanned,
+            vec![
+                (b"c:aaa:k1".to_vec(), b"v1".to_vec()),
+                (b"c:aaa:k2".to_vec(), b"v2".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_redb_store_scan_prefix_at_max_byte_boundary() {
+        // Exercises the `prefix_upper_bound` None branch (all-0xff prefix has no upper bound).
+        let (store, _dir) = temp_store();
+        store.set(&[0xff, 0xff], b"a").unwrap();
+        store.set(&[0xff, 0xff, 0x00], b"b").unwrap();
+        store.set(&[0x00], b"unrelated").unwrap();
+
+        let scanned = store.scan_prefix(&[0xff, 0xff]).unwrap();
+        assert_eq!(
+            scanned,
+            vec![
+                (vec![0xff, 0xff], b"a".to_vec()),
+                (vec![0xff, 0xff, 0x00], b"b".to_vec()),
+            ]
         );
     }
 

@@ -42,6 +42,8 @@ pub struct BlockBody {
 /// Commit signature from an active validator.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommitSignature {
+    #[serde(default)]
+    pub round: u32,
     pub validator_address: Address,
     pub signature: Vec<u8>,
     pub timestamp_unix_secs: u64,

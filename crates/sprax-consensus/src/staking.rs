@@ -401,23 +401,49 @@ impl StakingKeeper {
             .collect();
 
         // Sort descending by token weight
-        active.sort_by_key(|b| std::cmp::Reverse(b.tokens));
+        active.sort_by(|a, b| {
+            b.tokens
+                .cmp(&a.tokens)
+                .then_with(|| a.operator_address.cmp(&b.operator_address))
+        });
         active.truncate(self.params.max_validators);
 
         let consensus_validators: Vec<Validator> = active
             .into_iter()
             .map(|v| {
                 // Voting power in millions of atto-SPRX units (or integer SPRX)
-                let voting_power = (v.tokens.as_atto() / 1_000_000_000_000_000_000).max(1) as u64;
-                Validator::new(v.operator_address, v.consensus_pubkey.clone(), voting_power)
+                let voting_power =
+                    u64::try_from((v.tokens.as_atto() / 1_000_000_000_000_000_000).max(1))
+                        .map_err(|_| {
+                            ConsensusError::InvalidValidatorSet(
+                                "validator voting power overflow".into(),
+                            )
+                        })?;
+                Ok(Validator::new(
+                    v.operator_address,
+                    v.consensus_pubkey.clone(),
+                    voting_power,
+                ))
             })
-            .collect();
+            .collect::<Result<_, ConsensusError>>()?;
 
         ValidatorSet::new(consensus_validators)
     }
 
     pub fn get_validator(&self, addr: &Address) -> Option<&StakingValidator> {
         self.validators.get(addr)
+    }
+
+    /// All validator addresses known to this keeper (active, jailed, or unbonding) — the set
+    /// `ConsensusDriver` walks each height to re-sync cached `tokens` from the canonical ledger.
+    pub fn all_validator_addresses(&self) -> Vec<Address> {
+        self.validators.keys().copied().collect()
+    }
+
+    pub fn sync_validator_tokens(&mut self, addr: &Address, canonical_tokens: Amount) {
+        if let Some(val) = self.validators.get_mut(addr) {
+            val.tokens = canonical_tokens;
+        }
     }
 
     pub fn get_delegation(&self, delegator: &Address, validator: &Address) -> Option<&Delegation> {
@@ -571,6 +597,7 @@ mod tests {
             height: 42,
             round: 0,
             vote_a: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 42,
                 0,
@@ -579,6 +606,7 @@ mod tests {
                 vec![1; 64],
             ),
             vote_b: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 42,
                 0,
@@ -630,6 +658,7 @@ mod tests {
             height: 10,
             round: 0,
             vote_a: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 10,
                 0,
@@ -638,6 +667,7 @@ mod tests {
                 vec![1; 64],
             ),
             vote_b: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 10,
                 0,

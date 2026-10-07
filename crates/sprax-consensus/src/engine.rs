@@ -53,6 +53,61 @@ impl BftConsensusEngine {
         self.state.locked_block
     }
 
+    /// Restore a lock that was durably recorded before releasing a precommit.
+    pub fn restore_lock(&mut self, height: u64, round: u32, block: Hash32) {
+        if height == self.state.height {
+            self.state.locked_round = Some(round);
+            self.state.locked_block = Some(block);
+        }
+    }
+
+    /// Install a valid-round certificate already verified by `SignedProposal::verify`.
+    /// It allows a validator with an older conflicting lock to prevote the certified block.
+    pub fn install_valid_round_certificate(
+        &mut self,
+        height: u64,
+        round: u32,
+        block: Hash32,
+        votes: &[Vote],
+    ) {
+        if height != self.state.height {
+            return;
+        }
+        if self.state.valid_round.is_some_and(|valid_round| {
+            round < valid_round || (round == valid_round && self.state.valid_block != Some(block))
+        }) {
+            return;
+        }
+        for vote in votes {
+            self.prevotes
+                .entry((height, round, vote.validator_address))
+                .or_insert_with(|| vote.clone());
+        }
+        if self
+            .state
+            .valid_round
+            .is_none_or(|valid_round| round > valid_round)
+        {
+            self.state.valid_round = Some(round);
+            self.state.valid_block = Some(block);
+        }
+    }
+
+    #[must_use]
+    pub fn can_prevote_block(&self, block: Hash32) -> bool {
+        match (self.state.locked_round, self.state.locked_block) {
+            (None, None) => true,
+            (Some(_), Some(locked)) if locked == block => true,
+            (Some(locked_round), Some(_)) => {
+                self.state
+                    .valid_round
+                    .is_some_and(|valid_round| valid_round > locked_round)
+                    && self.state.valid_block == Some(block)
+            }
+            _ => false,
+        }
+    }
+
     #[must_use]
     pub fn valid_round(&self) -> Option<u32> {
         self.state.valid_round
@@ -68,26 +123,9 @@ impl BftConsensusEngine {
         &self.val_set
     }
 
-    /// Replaces the active validator set (e.g. reflecting the latest `StakingKeeper` state at
-    /// the start of a new height, after delegations/slashing since the last height).
-    ///
-    /// Carries `proposer_priority` forward for validators present in both the old and new set:
-    /// `StakingKeeper::get_active_validator_set` builds fresh `Validator` instances (priority
-    /// always 0) on every call, so naively replacing the set here would reset DWRR state every
-    /// single height — which breaks fairness (the highest-stake validator would win every
-    /// height's initial-priority tiebreak forever) rather than rotating proposers over time.
-    /// Only validators new to the set start at priority 0.
-    pub fn set_validator_set(&mut self, mut val_set: ValidatorSet) {
-        for new_val in val_set.validators_mut() {
-            if let Some(old_val) = self
-                .val_set
-                .validators()
-                .iter()
-                .find(|v| v.address == new_val.address)
-            {
-                new_val.proposer_priority = old_val.proposer_priority;
-            }
-        }
+    /// Replaces the active validator set at a finalized height boundary.
+    /// Proposer selection depends only on genesis, height, round and this committed set.
+    pub fn set_validator_set(&mut self, val_set: ValidatorSet) {
         self.val_set = val_set;
     }
 
@@ -110,6 +148,12 @@ impl BftConsensusEngine {
 
     /// Transitions engine to a new height.
     pub fn start_height(&mut self, height: u64) {
+        if self.state.height == height {
+            if self.state.step == RoundStep::NewHeight {
+                self.state.step = RoundStep::Propose;
+            }
+            return;
+        }
         self.state = RoundState::new(height);
         self.prevotes.clear();
         self.precommits.clear();
@@ -124,12 +168,30 @@ impl BftConsensusEngine {
     /// exactly what equivocation detection is designed to catch, so honest retries would be
     /// indistinguishable from real double-signing to any observer.
     pub fn set_round(&mut self, round: u32) {
+        if round < self.state.round {
+            return;
+        }
         self.state.round = round;
+        self.state.step = RoundStep::Propose;
+        let height = self.state.height;
+        let locked = self.state.locked_round;
+        let valid = self.state.valid_round;
+        let retained =
+            |h: u64, r: u32| h == height && (r == round || Some(r) == locked || Some(r) == valid);
+        self.prevotes.retain(|(h, r, _), _| retained(*h, *r));
+        self.precommits.retain(|(h, r, _), _| retained(*h, *r));
+        self.proposed_blocks.retain(|(h, r), _| retained(*h, *r));
     }
 
-    /// Selects the deterministic proposer for the current round using DWRR.
-    pub fn select_proposer(&mut self) -> Validator {
-        self.val_set.select_proposer()
+    /// Selects a deterministic weighted proposer without process-local round history.
+    pub fn select_proposer(
+        &self,
+        genesis: sprax_types::Hash32,
+        height: u64,
+        round: u32,
+    ) -> Result<Validator, ConsensusError> {
+        self.val_set
+            .select_proposer_for_round(genesis, height, round)
     }
 
     /// Submits a block proposal for the current (height, round).
@@ -192,14 +254,91 @@ impl BftConsensusEngine {
             if let Some(bh) =
                 self.get_prevoted_block_with_quorum(self.state.height, self.state.round)
             {
-                self.state.locked_round = Some(self.state.round);
-                self.state.locked_block = Some(bh);
-                self.state.valid_round = Some(self.state.round);
-                self.state.valid_block = Some(bh);
+                if self
+                    .proposed_blocks
+                    .get(&(self.state.height, self.state.round))
+                    == Some(&bh)
+                {
+                    self.state.valid_round = Some(self.state.round);
+                    self.state.valid_block = Some(bh);
+                }
             }
         }
 
         Ok(has_quorum)
+    }
+
+    /// Called only after the driver validates the proposal and durably signs its non-nil
+    /// precommit. Receiving a quorum for unknown data cannot create a local signing lock.
+    pub fn record_precommit_lock(
+        &mut self,
+        height: u64,
+        round: u32,
+        hash: Hash32,
+    ) -> Result<(), ConsensusError> {
+        if !self.can_record_precommit_lock(height, round, hash) {
+            return Err(ConsensusError::InvalidVote(
+                "cannot lock unvalidated, conflicting or nonquorum proposal".into(),
+            ));
+        }
+        self.state.locked_round = Some(round);
+        self.state.locked_block = Some(hash);
+        Ok(())
+    }
+
+    #[must_use]
+    pub fn can_record_precommit_lock(&self, height: u64, round: u32, hash: Hash32) -> bool {
+        if height != self.state.height
+            || round != self.state.round
+            || self.proposed_blocks.get(&(height, round)) != Some(&hash)
+            || self.get_prevoted_block_with_quorum(height, round) != Some(hash)
+        {
+            return false;
+        }
+        match (self.state.locked_round, self.state.locked_block) {
+            (None, None) => true,
+            (Some(_), Some(locked)) if locked == hash => true,
+            (Some(locked_round), Some(_)) => {
+                self.state
+                    .valid_round
+                    .is_some_and(|valid_round| valid_round > locked_round)
+                    && self.state.valid_block == Some(hash)
+            }
+            _ => false,
+        }
+    }
+
+    pub fn prevote_quorum_certificate(&self, height: u64, round: u32, hash: Hash32) -> Vec<Vote> {
+        let mut votes: Vec<_> = self
+            .prevotes
+            .iter()
+            .filter(|((vote_height, vote_round, _), vote)| {
+                *vote_height == height && *vote_round == round && vote.block_hash == Some(hash)
+            })
+            .map(|(_, vote)| vote.clone())
+            .collect();
+        votes.sort_by_key(|vote| vote.validator_address);
+        votes
+    }
+
+    pub fn has_nil_precommit_quorum(&self, height: u64, round: u32) -> bool {
+        let power = self
+            .precommits
+            .iter()
+            .filter(|((h, r, _), vote)| *h == height && *r == round && vote.block_hash.is_none())
+            .filter_map(|((_, _, address), _)| {
+                self.val_set
+                    .validators()
+                    .iter()
+                    .find(|v| v.address == *address)
+                    .map(|v| v.voting_power)
+            })
+            .sum();
+        self.val_set.has_quorum(power)
+    }
+
+    pub fn retained_vote_count(&self) -> usize {
+        self.prevotes.len() + self.precommits.len()
     }
 
     /// Casts or receives a Precommit attestation. Returns aggregated commit signatures if +2/3 precommits reached.
@@ -332,6 +471,7 @@ impl BftConsensusEngine {
         for ((h, r, addr), vote) in &self.precommits {
             if *h == height && *r == round && vote.block_hash == Some(block_hash) {
                 sigs.push(CommitSignature {
+                    round,
                     validator_address: *addr,
                     signature: vote.signature.clone(),
                     timestamp_unix_secs: 1_700_000_000,
@@ -366,7 +506,7 @@ mod tests {
         engine.start_height(1);
         assert_eq!(engine.current_step(), RoundStep::Propose);
 
-        let proposer = engine.select_proposer();
+        let proposer = engine.select_proposer(Hash32::ZERO, 1, 0).unwrap();
         let proposal_hash = Hash32::new([0xaa; 32]);
         engine
             .propose_block(proposal_hash, proposer.address)
@@ -405,7 +545,15 @@ mod tests {
             // Derived from the signer's own address so `validator_address` matches the signer.
             signer.address()
         };
-        let mut vote = Vote::new(vote_type, height, round, block_hash, address, vec![]);
+        let mut vote = Vote::new(
+            sprax_types::Hash32::ZERO,
+            vote_type,
+            height,
+            round,
+            block_hash,
+            address,
+            vec![],
+        );
         let sign_bytes = vote.sign_bytes().unwrap();
         vote.signature = signer.sign(&sign_bytes);
         vote

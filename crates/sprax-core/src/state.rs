@@ -23,6 +23,63 @@ impl Default for AccountState {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct SupplyState {
+    /// Total issued supply, including liquid, bonded and unbonding balances (genesis + minted - burned).
+    pub circulating_supply: Amount,
+    /// Cumulative transaction fees and canonical slashing penalties burned since genesis.
+    pub total_burned: Amount,
+}
+
+impl Default for SupplyState {
+    fn default() -> Self {
+        Self {
+            circulating_supply: Amount::ZERO,
+            total_burned: Amount::ZERO,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ValidatorStakeState {
+    pub tokens: Amount,
+}
+
+impl Default for ValidatorStakeState {
+    fn default() -> Self {
+        Self {
+            tokens: Amount::ZERO,
+        }
+    }
+}
+
+/// A single delegator's bonded stake with one validator.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DelegationState {
+    pub shares: Amount,
+    pub balance: Amount,
+}
+
+impl Default for DelegationState {
+    fn default() -> Self {
+        Self {
+            shares: Amount::ZERO,
+            balance: Amount::ZERO,
+        }
+    }
+}
+
+/// A pending unbonding entry: `amount` returns to `delegator`'s account balance once
+/// `completion_height` is reached (see `ChainLedger`'s matured-unbonding sweep).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct UnbondingRecord {
+    pub creation_height: u64,
+    pub delegator: Address,
+    pub validator: Address,
+    pub completion_height: u64,
+    pub amount: Amount,
+}
+
 /// Helper for encoding and accessing account state in key-value store.
 #[derive(Debug)]
 pub struct StateAccessor;
@@ -33,6 +90,44 @@ impl StateAccessor {
         let mut k = Vec::with_capacity(1 + 20);
         k.push(b'a'); // 'a' prefix for account
         k.extend_from_slice(addr.as_bytes());
+        k
+    }
+
+    #[must_use]
+    pub fn supply_key() -> Vec<u8> {
+        vec![b's'] // 's' prefix for chain-wide supply state (single well-known key)
+    }
+
+    #[must_use]
+    pub fn validator_stake_key(validator: &Address) -> Vec<u8> {
+        let mut k = Vec::with_capacity(1 + 20);
+        k.push(b'v'); // 'v' prefix for validator stake
+        k.extend_from_slice(validator.as_bytes());
+        k
+    }
+
+    #[must_use]
+    pub fn delegation_key(delegator: &Address, validator: &Address) -> Vec<u8> {
+        let mut k = Vec::with_capacity(1 + 20 + 20);
+        k.push(b'd'); // 'd' prefix for delegation
+        k.extend_from_slice(delegator.as_bytes());
+        k.extend_from_slice(validator.as_bytes());
+        k
+    }
+
+    #[must_use]
+    pub fn unbonding_key(
+        completion_height: u64,
+        delegator: &Address,
+        validator: &Address,
+        tx_nonce: u64,
+    ) -> Vec<u8> {
+        let mut k = Vec::with_capacity(1 + 8 + 20 + 20 + 8);
+        k.push(b'u'); // 'u' prefix for unbonding queue
+        k.extend_from_slice(&completion_height.to_be_bytes());
+        k.extend_from_slice(delegator.as_bytes());
+        k.extend_from_slice(validator.as_bytes());
+        k.extend_from_slice(&tx_nonce.to_be_bytes());
         k
     }
 
@@ -62,6 +157,227 @@ impl StateAccessor {
         store
             .set(&key, &bytes)
             .map_err(|e| CoreError::StateError(e.to_string()))
+    }
+
+    pub fn get_supply_state(store: &impl ReadonlyKVStore) -> Result<SupplyState, CoreError> {
+        let key = Self::supply_key();
+        match store
+            .get(&key)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| CoreError::StateError(format!("deserialization error: {e}"))),
+            None => Ok(SupplyState::default()),
+        }
+    }
+
+    pub fn set_supply_state(store: &impl KVStore, supply: &SupplyState) -> Result<(), CoreError> {
+        let key = Self::supply_key();
+        let bytes = serde_json::to_vec(supply)
+            .map_err(|e| CoreError::StateError(format!("serialization error: {e}")))?;
+        store
+            .set(&key, &bytes)
+            .map_err(|e| CoreError::StateError(e.to_string()))
+    }
+
+    pub fn get_validator_stake(
+        store: &impl ReadonlyKVStore,
+        validator: &Address,
+    ) -> Result<ValidatorStakeState, CoreError> {
+        let key = Self::validator_stake_key(validator);
+        match store
+            .get(&key)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| CoreError::StateError(format!("deserialization error: {e}"))),
+            None => Ok(ValidatorStakeState::default()),
+        }
+    }
+
+    pub fn set_validator_stake(
+        store: &impl KVStore,
+        validator: &Address,
+        stake: &ValidatorStakeState,
+    ) -> Result<(), CoreError> {
+        let key = Self::validator_stake_key(validator);
+        let bytes = serde_json::to_vec(stake)
+            .map_err(|e| CoreError::StateError(format!("serialization error: {e}")))?;
+        store
+            .set(&key, &bytes)
+            .map_err(|e| CoreError::StateError(e.to_string()))
+    }
+
+    pub fn get_delegation(
+        store: &impl ReadonlyKVStore,
+        delegator: &Address,
+        validator: &Address,
+    ) -> Result<DelegationState, CoreError> {
+        let key = Self::delegation_key(delegator, validator);
+        match store
+            .get(&key)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+        {
+            Some(bytes) => serde_json::from_slice(&bytes)
+                .map_err(|e| CoreError::StateError(format!("deserialization error: {e}"))),
+            None => Ok(DelegationState::default()),
+        }
+    }
+
+    pub fn delegation_prefix(validator: &Address) -> Vec<u8> {
+        [b"staking/delegations/".as_slice(), validator.as_bytes()].concat()
+    }
+
+    pub fn unbonding_prefix(validator: &Address) -> Vec<u8> {
+        [b"staking/unbondings/".as_slice(), validator.as_bytes()].concat()
+    }
+
+    pub fn delegator_unbonding_prefix(delegator: &Address) -> Vec<u8> {
+        [
+            b"staking/delegator-unbondings/".as_slice(),
+            delegator.as_bytes(),
+        ]
+        .concat()
+    }
+    pub fn delegator_unbonding_index_key(delegator: &Address, key: &[u8]) -> Vec<u8> {
+        [Self::delegator_unbonding_prefix(delegator).as_slice(), key].concat()
+    }
+    pub fn delegations_for(
+        store: &impl ReadonlyKVStore,
+        delegator: &Address,
+    ) -> Result<Vec<(Address, DelegationState)>, CoreError> {
+        let prefix = [b"d".as_slice(), delegator.as_bytes()].concat();
+        let mut records = Vec::new();
+        for (key, value) in store
+            .scan_prefix(&prefix)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+        {
+            let delegation: DelegationState =
+                serde_json::from_slice(&value).map_err(|e| CoreError::StateError(e.to_string()))?;
+            let bytes: [u8; 20] = key
+                .get(21..)
+                .and_then(|v| v.try_into().ok())
+                .ok_or_else(|| CoreError::StateError("invalid delegation key".into()))?;
+            if !delegation.balance.is_zero() {
+                records.push((Address::new(bytes), delegation));
+            }
+        }
+        Ok(records)
+    }
+
+    pub fn unbonding_index_key(validator: &Address, key: &[u8]) -> Vec<u8> {
+        [Self::unbonding_prefix(validator).as_slice(), key].concat()
+    }
+
+    pub fn set_delegation(
+        store: &impl KVStore,
+        delegator: &Address,
+        validator: &Address,
+        delegation: &DelegationState,
+    ) -> Result<(), CoreError> {
+        let key = Self::delegation_key(delegator, validator);
+        let prefix = Self::delegation_prefix(validator);
+        let index = [prefix.as_slice(), delegator.as_bytes()].concat();
+        if delegation.balance.is_zero() {
+            store
+                .delete(&index)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+        } else {
+            if store
+                .get(&index)
+                .map_err(|e| CoreError::StateError(e.to_string()))?
+                .is_none()
+                && store
+                    .scan_prefix(&prefix)
+                    .map_err(|e| CoreError::StateError(e.to_string()))?
+                    .len()
+                    >= 1024
+            {
+                return Err(CoreError::StateError(
+                    "validator delegation limit reached".into(),
+                ));
+            }
+            store
+                .set(&index, delegator.as_bytes())
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+        }
+        let bytes =
+            serde_json::to_vec(delegation).map_err(|e| CoreError::StateError(e.to_string()))?;
+        store
+            .set(&key, &bytes)
+            .map_err(|e| CoreError::StateError(e.to_string()))
+    }
+
+    /// Queues a new unbonding entry.
+    pub fn set_unbonding(
+        store: &impl KVStore,
+        entry: &UnbondingRecord,
+        tx_nonce: u64,
+    ) -> Result<(), CoreError> {
+        let key = Self::unbonding_key(
+            entry.completion_height,
+            &entry.delegator,
+            &entry.validator,
+            tx_nonce,
+        );
+        let mut merged = entry.clone();
+        if let Some(existing) = store
+            .get(&key)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+        {
+            let previous: UnbondingRecord = serde_json::from_slice(&existing)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            merged.amount = previous
+                .amount
+                .checked_add(entry.amount)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+        } else if store
+            .scan_prefix(&Self::unbonding_prefix(&entry.validator))
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .len()
+            >= 1024
+        {
+            return Err(CoreError::StateError(
+                "validator unbonding limit reached".into(),
+            ));
+        }
+        let bytes =
+            serde_json::to_vec(&merged).map_err(|e| CoreError::StateError(e.to_string()))?;
+        store
+            .set(&key, &bytes)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        store
+            .set(
+                &Self::delegator_unbonding_index_key(&entry.delegator, &key),
+                &key,
+            )
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        store
+            .set(&Self::unbonding_index_key(&entry.validator, &key), &key)
+            .map_err(|e| CoreError::StateError(e.to_string()))
+    }
+
+    /// Returns every unbonding entry with `completion_height <= max_height_inclusive`, each
+    /// paired with its raw storage key (so the caller can `KVStore::delete` it once processed).
+    pub fn scan_matured_unbondings(
+        store: &impl ReadonlyKVStore,
+        max_height_inclusive: u64,
+    ) -> Result<Vec<(Vec<u8>, UnbondingRecord)>, CoreError> {
+        let start = vec![b'u'];
+        let mut end = vec![b'u'];
+        end.extend_from_slice(&max_height_inclusive.saturating_add(1).to_be_bytes());
+
+        let raw = store
+            .scan_range(&start, Some(&end))
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+
+        raw.into_iter()
+            .map(|(key, bytes)| {
+                let record: UnbondingRecord = serde_json::from_slice(&bytes)
+                    .map_err(|e| CoreError::StateError(format!("deserialization error: {e}")))?;
+                Ok((key, record))
+            })
+            .collect()
     }
 }
 

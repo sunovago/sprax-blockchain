@@ -5,7 +5,7 @@ use crate::{
     peer::{PeerId, PeerScore},
 };
 use parking_lot::RwLock;
-use sprax_consensus::{EquivocationEvidence, Vote};
+use sprax_consensus::{EquivocationEvidence, SignedProposal, Vote};
 use sprax_types::{Block, Hash32, Transaction};
 use std::{
     collections::{HashMap, HashSet},
@@ -19,7 +19,7 @@ use std::{
 use tokio::{
     io::{AsyncReadExt, AsyncWriteExt},
     net::{TcpListener, TcpStream},
-    sync::mpsc,
+    sync::{mpsc, watch, OwnedSemaphorePermit, Semaphore},
 };
 use tracing::{debug, info, warn};
 
@@ -31,13 +31,15 @@ pub struct PeerHandle {
     pub height: u64,
     pub latest_block_hash: Hash32,
     pub score: PeerScore,
-    sender: mpsc::UnboundedSender<NetworkMessage>,
+    sender: mpsc::Sender<NetworkMessage>,
+    preferred_direction: bool,
+    disconnect: watch::Sender<bool>,
 }
 
 impl PeerHandle {
     pub fn send(&self, msg: NetworkMessage) -> Result<(), NetworkError> {
         self.sender
-            .send(msg)
+            .try_send(msg)
             .map_err(|e| NetworkError::ConnectionFailed(format!("failed to send message: {e}")))
     }
 }
@@ -50,15 +52,19 @@ pub struct P2pService {
     local_peer_id: PeerId,
     chain_id: String,
     config: NetworkConfig,
+    inbound_slots: Arc<Semaphore>,
+    outbound_slots: Arc<Semaphore>,
     peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
     known_addresses: Arc<RwLock<HashSet<String>>>,
     is_running: Arc<AtomicBool>,
-    inbound_tx_tx: mpsc::UnboundedSender<Transaction>,
-    inbound_block_tx: mpsc::UnboundedSender<Block>,
-    inbound_vote_tx: mpsc::UnboundedSender<Vote>,
-    inbound_proposal_tx: mpsc::UnboundedSender<(u64, u32, Block)>,
-    inbound_evidence_tx: mpsc::UnboundedSender<EquivocationEvidence>,
+    shutdown: watch::Sender<u64>,
+    inbound_tx_tx: mpsc::Sender<Transaction>,
+    inbound_block_tx: mpsc::Sender<Block>,
+    inbound_vote_tx: mpsc::Sender<Vote>,
+    inbound_proposal_tx: mpsc::Sender<SignedProposal>,
+    inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
     block_fetch_fn: BlockFetchFn,
+    finalized_tip: Arc<RwLock<(u64, Hash32)>>,
 }
 
 impl std::fmt::Debug for P2pService {
@@ -77,13 +83,15 @@ impl P2pService {
         local_peer_id: PeerId,
         chain_id: String,
         config: NetworkConfig,
-        inbound_tx_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block_tx: mpsc::UnboundedSender<Block>,
-        inbound_vote_tx: mpsc::UnboundedSender<Vote>,
-        inbound_proposal_tx: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence_tx: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx_tx: mpsc::Sender<Transaction>,
+        inbound_block_tx: mpsc::Sender<Block>,
+        inbound_vote_tx: mpsc::Sender<Vote>,
+        inbound_proposal_tx: mpsc::Sender<SignedProposal>,
+        inbound_evidence_tx: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
     ) -> Self {
+        let inbound_slots = Arc::new(Semaphore::new(config.max_inbound_peers.min(1024)));
+        let outbound_slots = Arc::new(Semaphore::new(config.max_outbound_peers.min(1024)));
         let mut known = HashSet::new();
         for peer in &config.bootstrap_peers {
             known.insert(peer.clone());
@@ -93,15 +101,19 @@ impl P2pService {
             local_peer_id,
             chain_id,
             config,
+            inbound_slots,
+            outbound_slots,
             peers: Arc::new(RwLock::new(HashMap::new())),
             known_addresses: Arc::new(RwLock::new(known)),
             is_running: Arc::new(AtomicBool::new(false)),
+            shutdown: watch::channel(0).0,
             inbound_tx_tx,
             inbound_block_tx,
             inbound_vote_tx,
             inbound_proposal_tx,
             inbound_evidence_tx,
             block_fetch_fn,
+            finalized_tip: Arc::new(RwLock::new((0, Hash32::ZERO))),
         }
     }
 
@@ -130,6 +142,9 @@ impl P2pService {
 
     /// Broadcasts a newly produced/committed block to all connected peers.
     pub fn broadcast_block(&self, block: Block) {
+        if let Ok(hash) = sprax_crypto::Hasher::block_hash(&block.header) {
+            self.update_finalized_tip(block.header.height, hash);
+        }
         let peers = self.peers.read();
         let msg = NetworkMessage::BlockGossip(block);
         for peer in peers.values() {
@@ -137,14 +152,19 @@ impl P2pService {
         }
     }
 
+    /// Refresh handshake metadata only after the caller commits a canonical block.
+    /// Raw peer messages must never advance this tip.
+    pub fn update_finalized_tip(&self, height: u64, hash: Hash32) {
+        let mut tip = self.finalized_tip.write();
+        if height > tip.0 || (tip.0 == 0 && tip.1 == Hash32::ZERO) {
+            *tip = (height, hash);
+        }
+    }
+
     /// Broadcasts a block proposal for the given (height, round) to all connected peers.
-    pub fn broadcast_proposal(&self, height: u64, round: u32, block: Block) {
+    pub fn broadcast_proposal(&self, proposal: SignedProposal) {
         let peers = self.peers.read();
-        let msg = NetworkMessage::Proposal {
-            height,
-            round,
-            block,
-        };
+        let msg = NetworkMessage::Proposal(proposal);
         for peer in peers.values() {
             let _ = peer.send(msg.clone());
         }
@@ -159,7 +179,7 @@ impl P2pService {
         }
     }
 
-    /// Broadcasts double-sign evidence so every honest peer can slash the offending validator locally.
+    /// Broadcasts signed double-sign observations without authorizing state changes.
     pub fn broadcast_evidence(&self, evidence: EquivocationEvidence) {
         let peers = self.peers.read();
         let msg = NetworkMessage::Evidence(evidence);
@@ -175,6 +195,11 @@ impl P2pService {
         current_height: u64,
         latest_hash: Hash32,
     ) -> Result<(), NetworkError> {
+        let slot = Arc::clone(&self.outbound_slots)
+            .try_acquire_owned()
+            .map_err(|_| {
+                NetworkError::ConnectionFailed("outbound connection limit reached".into())
+            })?;
         let addr: SocketAddr = addr_str.parse().map_err(|e| {
             NetworkError::InvalidAddress(format!("invalid socket address '{addr_str}': {e}"))
         })?;
@@ -202,6 +227,9 @@ impl P2pService {
             self.inbound_proposal_tx.clone(),
             self.inbound_evidence_tx.clone(),
             Arc::clone(&self.block_fetch_fn),
+            self.config.max_message_size_bytes,
+            ShutdownSignal::new(&self.shutdown),
+            slot,
         )
         .await
     }
@@ -217,11 +245,15 @@ impl P2pService {
         }
 
         let listen_addr = format!("{}:{}", self.config.listen_addr, self.config.p2p_port);
-        let listener = TcpListener::bind(&listen_addr).await.map_err(|e| {
-            NetworkError::ConnectionFailed(format!(
-                "failed to bind TCP listener on {listen_addr}: {e}"
-            ))
-        })?;
+        let listener = match TcpListener::bind(&listen_addr).await {
+            Ok(listener) => listener,
+            Err(error) => {
+                self.is_running.store(false, Ordering::SeqCst);
+                return Err(NetworkError::ConnectionFailed(format!(
+                    "failed to bind TCP listener on {listen_addr}: {error}"
+                )));
+            }
+        };
 
         info!(
             peer_id = %self.local_peer_id,
@@ -240,12 +272,27 @@ impl P2pService {
         let proposal_in = self.inbound_proposal_tx.clone();
         let evidence_in = self.inbound_evidence_tx.clone();
         let fetch_fn = Arc::clone(&self.block_fetch_fn);
+        let inbound_slots = Arc::clone(&self.inbound_slots);
+        let max_message_size = self.config.max_message_size_bytes;
+        let mut shutdown = ShutdownSignal::new(&self.shutdown);
+
+        self.update_finalized_tip(initial_height, initial_hash);
+        let finalized_tip = Arc::clone(&self.finalized_tip);
 
         // Spawn Inbound TCP Listener Loop
         tokio::spawn(async move {
             while is_running.load(Ordering::SeqCst) {
-                match listener.accept().await {
+                let accepted = tokio::select! {
+                    biased;
+                    _ = wait_for_shutdown(&mut shutdown) => break,
+                    result = listener.accept() => result,
+                };
+                match accepted {
                     Ok((stream, remote_addr)) => {
+                        let Ok(slot) = Arc::clone(&inbound_slots).try_acquire_owned() else {
+                            drop(stream);
+                            continue;
+                        };
                         debug!(addr = %remote_addr, "Accepted incoming P2P connection");
                         let p = Arc::clone(&peers);
                         let k = Arc::clone(&known_addresses);
@@ -258,13 +305,16 @@ impl P2pService {
                         let evidence_in = evidence_in.clone();
                         let fetch_fn = Arc::clone(&fetch_fn);
 
+                        let connection_shutdown = shutdown.clone();
+                        let (current_height, current_hash) = *finalized_tip.read();
                         tokio::spawn(async move {
-                            if let Err(e) = Self::handle_inbound_connection(
+                            let _connection_slot = slot;
+                            let connection = Self::handle_inbound_connection(
                                 stream,
                                 l_id,
                                 c_id,
-                                initial_height,
-                                initial_hash,
+                                current_height,
+                                current_hash,
                                 p,
                                 k,
                                 tx_in,
@@ -273,9 +323,10 @@ impl P2pService {
                                 proposal_in,
                                 evidence_in,
                                 fetch_fn,
-                            )
-                            .await
-                            {
+                                max_message_size,
+                                connection_shutdown.clone(),
+                            );
+                            if let Err(e) = connection.await {
                                 debug!("Inbound connection closed: {e}");
                             }
                         });
@@ -299,6 +350,8 @@ impl P2pService {
 
     pub fn stop(&self) {
         self.is_running.store(false, Ordering::SeqCst);
+        self.shutdown
+            .send_modify(|generation| *generation = generation.wrapping_add(1));
         self.peers.write().clear();
     }
 
@@ -311,54 +364,72 @@ impl P2pService {
         latest_hash: Hash32,
         peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
         known: Arc<RwLock<HashSet<String>>>,
-        inbound_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block: mpsc::UnboundedSender<Block>,
-        inbound_vote: mpsc::UnboundedSender<Vote>,
-        inbound_proposal: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx: mpsc::Sender<Transaction>,
+        inbound_block: mpsc::Sender<Block>,
+        inbound_vote: mpsc::Sender<Vote>,
+        inbound_proposal: mpsc::Sender<SignedProposal>,
+        inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
+        max_message_size: usize,
+        mut shutdown: ShutdownSignal,
     ) -> Result<(), NetworkError> {
-        let remote_msg =
-            tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
-                .await
-                .map_err(|_| NetworkError::HandshakeFailed("handshake timed out".into()))??;
-        let (remote_id, remote_height, remote_hash) = match remote_msg {
-            NetworkMessage::Handshake {
-                peer_id,
-                chain_id: peer_chain_id,
-                height,
-                latest_block_hash,
-                listen_addr,
-            } => {
-                if peer_chain_id != chain_id {
-                    return Err(NetworkError::HandshakeFailed(format!(
-                        "chain ID mismatch: {peer_chain_id} != {chain_id}"
-                    )));
+        let handshake_work = async {
+            let remote_msg =
+                tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
+                    .await
+                    .map_err(|_| NetworkError::HandshakeFailed("handshake timed out".into()))??;
+            let (remote_id, remote_height, remote_hash) = match remote_msg {
+                NetworkMessage::Handshake {
+                    peer_id,
+                    chain_id: peer_chain_id,
+                    height,
+                    latest_block_hash,
+                    listen_addr,
+                } => {
+                    if peer_chain_id != chain_id {
+                        return Err(NetworkError::HandshakeFailed(format!(
+                            "chain ID mismatch: {peer_chain_id} != {chain_id}"
+                        )));
+                    }
+                    if let Some(addr) = listen_addr {
+                        if addr.len() <= 128 && addr.parse::<SocketAddr>().is_ok() {
+                            let mut known = known.write();
+                            if known.len() < 1024 {
+                                known.insert(addr);
+                            }
+                        }
+                    }
+                    (peer_id, height, latest_block_hash)
                 }
-                if let Some(addr) = listen_addr {
-                    known.write().insert(addr);
+                _ => {
+                    return Err(NetworkError::HandshakeFailed(
+                        "expected Handshake message".into(),
+                    ))
                 }
-                (peer_id, height, latest_block_hash)
-            }
-            _ => {
-                return Err(NetworkError::HandshakeFailed(
-                    "expected Handshake message".into(),
-                ))
-            }
+            };
+
+            // Send HandshakeAck
+            let ack = NetworkMessage::HandshakeAck {
+                peer_id: local_id.clone(),
+                chain_id: chain_id.clone(),
+                height: current_height,
+                latest_block_hash: latest_hash,
+            };
+            Self::write_frame(&mut stream, &ack).await?;
+            Ok::<_, NetworkError>((remote_id, remote_height, remote_hash))
+        };
+        let (remote_id, remote_height, remote_hash) = tokio::select! {
+            biased;
+            _ = wait_for_shutdown(&mut shutdown) => return Err(NetworkError::ConnectionFailed("network stopped".into())),
+            result = handshake_work => result?,
         };
 
-        // Send HandshakeAck
-        let ack = NetworkMessage::HandshakeAck {
-            peer_id: local_id.clone(),
-            chain_id: chain_id.clone(),
-            height: current_height,
-            latest_block_hash: latest_hash,
-        };
-        Self::write_frame(&mut stream, &ack).await?;
-
+        validate_remote_id(&local_id, &remote_id)?;
+        let preferred_direction = local_id > remote_id;
         Self::run_connection_loop(
             stream,
             remote_id,
+            preferred_direction,
             remote_height,
             remote_hash,
             current_height,
@@ -369,6 +440,8 @@ impl P2pService {
             inbound_proposal,
             inbound_evidence,
             block_fetch_fn,
+            max_message_size,
+            shutdown,
         )
         .await
     }
@@ -382,62 +455,86 @@ impl P2pService {
         latest_hash: Hash32,
         peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
         _known: Arc<RwLock<HashSet<String>>>,
-        inbound_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block: mpsc::UnboundedSender<Block>,
-        inbound_vote: mpsc::UnboundedSender<Vote>,
-        inbound_proposal: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx: mpsc::Sender<Transaction>,
+        inbound_block: mpsc::Sender<Block>,
+        inbound_vote: mpsc::Sender<Vote>,
+        inbound_proposal: mpsc::Sender<SignedProposal>,
+        inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
+        max_message_size: usize,
+        mut shutdown: ShutdownSignal,
+        slot: OwnedSemaphorePermit,
     ) -> Result<(), NetworkError> {
-        // Send Handshake
-        let handshake = NetworkMessage::Handshake {
-            peer_id: local_id,
-            chain_id: chain_id.clone(),
-            height: current_height,
-            latest_block_hash: latest_hash,
-            listen_addr: None,
-        };
-        Self::write_frame(&mut stream, &handshake).await?;
+        let handshake_work = async {
+            // Send Handshake
+            let handshake = NetworkMessage::Handshake {
+                peer_id: local_id.clone(),
+                chain_id: chain_id.clone(),
+                height: current_height,
+                latest_block_hash: latest_hash,
+                listen_addr: None,
+            };
+            Self::write_frame(&mut stream, &handshake).await?;
 
-        // Read HandshakeAck (bounded — an unresponsive peer must not hang the dialer forever)
-        let ack_msg = tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
-            .await
-            .map_err(|_| NetworkError::HandshakeFailed("handshake ack timed out".into()))??;
-        let (remote_id, remote_height, remote_hash) = match ack_msg {
-            NetworkMessage::HandshakeAck {
-                peer_id,
-                chain_id: peer_chain_id,
-                height,
-                latest_block_hash,
-            } => {
-                if peer_chain_id != chain_id {
-                    return Err(NetworkError::HandshakeFailed(format!(
-                        "chain ID mismatch: {peer_chain_id} != {chain_id}"
-                    )));
+            // Read HandshakeAck (bounded — an unresponsive peer must not hang the dialer forever)
+            let ack_msg =
+                tokio::time::timeout(Duration::from_secs(5), Self::read_frame(&mut stream))
+                    .await
+                    .map_err(|_| {
+                        NetworkError::HandshakeFailed("handshake ack timed out".into())
+                    })??;
+            let (remote_id, remote_height, remote_hash) = match ack_msg {
+                NetworkMessage::HandshakeAck {
+                    peer_id,
+                    chain_id: peer_chain_id,
+                    height,
+                    latest_block_hash,
+                } => {
+                    if peer_chain_id != chain_id {
+                        return Err(NetworkError::HandshakeFailed(format!(
+                            "chain ID mismatch: {peer_chain_id} != {chain_id}"
+                        )));
+                    }
+                    (peer_id, height, latest_block_hash)
                 }
-                (peer_id, height, latest_block_hash)
-            }
-            _ => {
-                return Err(NetworkError::HandshakeFailed(
-                    "expected HandshakeAck message".into(),
-                ))
-            }
+                _ => {
+                    return Err(NetworkError::HandshakeFailed(
+                        "expected HandshakeAck message".into(),
+                    ))
+                }
+            };
+
+            Ok::<_, NetworkError>((remote_id, remote_height, remote_hash))
+        };
+        let (remote_id, remote_height, remote_hash) = tokio::select! {
+            biased;
+            _ = wait_for_shutdown(&mut shutdown) => return Err(NetworkError::ConnectionFailed("network stopped".into())),
+            result = handshake_work => result?,
         };
 
-        tokio::spawn(Self::run_connection_loop(
-            stream,
-            remote_id,
-            remote_height,
-            remote_hash,
-            current_height,
-            peers,
-            inbound_tx,
-            inbound_block,
-            inbound_vote,
-            inbound_proposal,
-            inbound_evidence,
-            block_fetch_fn,
-        ));
+        validate_remote_id(&local_id, &remote_id)?;
+        let preferred_direction = local_id < remote_id;
+        tokio::spawn(async move {
+            let _connection_slot = slot;
+            Self::run_connection_loop(
+                stream,
+                remote_id,
+                preferred_direction,
+                remote_height,
+                remote_hash,
+                current_height,
+                peers,
+                inbound_tx,
+                inbound_block,
+                inbound_vote,
+                inbound_proposal,
+                inbound_evidence,
+                block_fetch_fn,
+                max_message_size,
+                shutdown,
+            )
+            .await
+        });
         Ok(())
     }
 
@@ -445,20 +542,24 @@ impl P2pService {
     async fn run_connection_loop(
         stream: TcpStream,
         remote_id: PeerId,
+        preferred_direction: bool,
         height: u64,
         hash: Hash32,
         current_height: u64,
         peers: Arc<RwLock<HashMap<PeerId, PeerHandle>>>,
-        inbound_tx: mpsc::UnboundedSender<Transaction>,
-        inbound_block: mpsc::UnboundedSender<Block>,
-        inbound_vote: mpsc::UnboundedSender<Vote>,
-        inbound_proposal: mpsc::UnboundedSender<(u64, u32, Block)>,
-        inbound_evidence: mpsc::UnboundedSender<EquivocationEvidence>,
+        inbound_tx: mpsc::Sender<Transaction>,
+        inbound_block: mpsc::Sender<Block>,
+        inbound_vote: mpsc::Sender<Vote>,
+        inbound_proposal: mpsc::Sender<SignedProposal>,
+        inbound_evidence: mpsc::Sender<EquivocationEvidence>,
         block_fetch_fn: BlockFetchFn,
+        max_message_size: usize,
+        mut shutdown: ShutdownSignal,
     ) -> Result<(), NetworkError> {
         let (mut reader, mut writer) = stream.into_split();
-        let (outbound_tx, mut outbound_rx) = mpsc::unbounded_channel::<NetworkMessage>();
+        let (outbound_tx, mut outbound_rx) = mpsc::channel::<NetworkMessage>(8);
 
+        let (disconnect, mut disconnected) = watch::channel(false);
         let handle = PeerHandle {
             peer_id: remote_id.clone(),
             remote_addr: "".to_string(),
@@ -466,14 +567,30 @@ impl P2pService {
             latest_block_hash: hash,
             score: PeerScore::default(),
             sender: outbound_tx.clone(),
+            preferred_direction,
+            disconnect,
         };
 
-        peers.write().insert(remote_id.clone(), handle);
+        // Do not let a duplicate self-asserted ID replace the live connection's routing entry.
+        {
+            let mut connected = peers.write();
+            if let Some(existing) = connected.get(&remote_id) {
+                // Both ends choose the same TCP direction if they dial simultaneously.
+                // Equal-direction duplicates never replace a live connection.
+                if existing.preferred_direction || !preferred_direction {
+                    return Err(NetworkError::ConnectionFailed(
+                        "duplicate connected peer ID".into(),
+                    ));
+                }
+                existing.disconnect.send_replace(true);
+            }
+            connected.insert(remote_id.clone(), handle);
+        }
         info!(peer = %remote_id, "P2P Peer connected successfully");
 
         // Catch-up on connect: if this peer is ahead of us, ask for the blocks we're missing.
         if height > current_height {
-            let _ = outbound_tx.send(NetworkMessage::GetBlocksRequest {
+            let _ = outbound_tx.try_send(NetworkMessage::GetBlocksRequest {
                 from_height: current_height + 1,
                 to_height: height,
             });
@@ -483,25 +600,27 @@ impl P2pService {
         let r_id = remote_id.clone();
 
         // Writer task
-        let write_task = tokio::spawn(async move {
+        let mut write_task = tokio::spawn(async move {
             while let Some(msg) = outbound_rx.recv().await {
-                if let Ok(framed) = msg.encode() {
+                if let Ok(framed) = msg.encode_bounded(max_message_size) {
                     if writer.write_all(&framed).await.is_err() {
                         break;
                     }
+                } else {
+                    break;
                 }
             }
         });
 
         // Reader loop
-        let read_res = async {
+        let read_work = async {
             loop {
                 let mut len_bytes = [0u8; 4];
                 if reader.read_exact(&mut len_bytes).await.is_err() {
                     break;
                 }
                 let len = u32::from_be_bytes(len_bytes) as usize;
-                if len > 10 * 1024 * 1024 {
+                if len == 0 || len > max_message_size {
                     break; // Message too large
                 }
                 let mut buf = vec![0u8; len];
@@ -511,38 +630,50 @@ impl P2pService {
                 if let Ok(msg) = NetworkMessage::decode(&buf) {
                     match msg {
                         NetworkMessage::TxGossip(tx) => {
-                            let _ = inbound_tx.send(tx);
+                            let _ = inbound_tx.try_send(tx);
                         }
                         NetworkMessage::BlockGossip(block) => {
-                            let _ = inbound_block.send(block);
+                            let _ = inbound_block.try_send(block);
                         }
                         NetworkMessage::Ping { nonce } => {
                             let pong = NetworkMessage::Pong { nonce };
                             let _ = p_clone.read().get(&r_id).map(|p| p.send(pong));
                         }
                         NetworkMessage::Vote(vote) => {
-                            let _ = inbound_vote.send(vote);
+                            let _ = inbound_vote.try_send(vote);
                         }
-                        NetworkMessage::Proposal {
-                            height,
-                            round,
-                            block,
-                        } => {
-                            let _ = inbound_proposal.send((height, round, block));
+                        NetworkMessage::Proposal(proposal) => {
+                            let _ = inbound_proposal.try_send(proposal);
                         }
                         NetworkMessage::Evidence(evidence) => {
-                            let _ = inbound_evidence.send(evidence);
+                            let _ = inbound_evidence.try_send(evidence);
                         }
                         NetworkMessage::GetBlocksRequest {
                             from_height,
                             to_height,
                         } => {
-                            let blocks = block_fetch_fn(from_height, to_height);
-                            let _ = outbound_tx.send(NetworkMessage::GetBlocksResponse { blocks });
+                            // Serve one block per page; an untrusted range cannot allocate the archive.
+                            let blocks = if from_height <= to_height {
+                                block_fetch_fn(from_height, from_height)
+                            } else {
+                                Vec::new()
+                            };
+                            let _ =
+                                outbound_tx.try_send(NetworkMessage::GetBlocksResponse { blocks });
                         }
                         NetworkMessage::GetBlocksResponse { blocks } => {
+                            let last_height = blocks.last().map(|block| block.header.height);
                             for b in blocks {
-                                let _ = inbound_block.send(b);
+                                // Apply backpressure so catch-up never drops a required predecessor.
+                                if inbound_block.send(b).await.is_err() {
+                                    break;
+                                }
+                            }
+                            if let Some(last) = last_height.filter(|last| *last < height) {
+                                let _ = outbound_tx.try_send(NetworkMessage::GetBlocksRequest {
+                                    from_height: last + 1,
+                                    to_height: height,
+                                });
                             }
                         }
                         NetworkMessage::PeerDiscoveryRequest => {
@@ -551,8 +682,9 @@ impl P2pService {
                                 .values()
                                 .map(|p| p.remote_addr.to_string())
                                 .collect();
-                            let _ = outbound_tx
-                                .send(NetworkMessage::PeerDiscoveryResponse { peers: known_peers });
+                            let _ = outbound_tx.try_send(NetworkMessage::PeerDiscoveryResponse {
+                                peers: known_peers,
+                            });
                         }
                         NetworkMessage::PeerDiscoveryResponse { peers: discovered } => {
                             info!(count = discovered.len(), "Received peer discovery list");
@@ -563,14 +695,27 @@ impl P2pService {
                     }
                 }
             }
+        };
+        tokio::select! {
+            biased;
+            _ = wait_for_shutdown(&mut shutdown) => {},
+            _ = disconnected.changed() => {},
+            _ = read_work => {},
+            _ = &mut write_task => {},
         }
-        .await;
 
-        peers.write().remove(&remote_id);
+        let mut connected = peers.write();
+        if connected
+            .get(&remote_id)
+            .is_some_and(|peer| peer.sender.same_channel(&outbound_tx))
+        {
+            connected.remove(&remote_id);
+        }
+        drop(connected);
         write_task.abort();
         info!(peer = %remote_id, "P2P Peer disconnected");
 
-        Ok(read_res)
+        Ok(())
     }
 
     async fn write_frame(stream: &mut TcpStream, msg: &NetworkMessage) -> Result<(), NetworkError> {
@@ -589,6 +734,11 @@ impl P2pService {
             .await
             .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
         let len = u32::from_be_bytes(len_bytes) as usize;
+        if len == 0 || len > 4096 {
+            return Err(NetworkError::HandshakeFailed(
+                "handshake frame exceeds the 4 KiB limit".into(),
+            ));
+        }
         let mut buf = vec![0u8; len];
         stream
             .read_exact(&mut buf)
@@ -596,4 +746,42 @@ impl P2pService {
             .map_err(|e| NetworkError::ConnectionFailed(e.to_string()))?;
         NetworkMessage::decode(&buf)
     }
+}
+
+// Stop generations cannot be erased by a quick stop/start sequence. Every old task
+// keeps its original generation even if it first polls after the next start.
+#[derive(Clone)]
+struct ShutdownSignal {
+    receiver: watch::Receiver<u64>,
+    generation: u64,
+}
+impl ShutdownSignal {
+    fn new(sender: &watch::Sender<u64>) -> Self {
+        let receiver = sender.subscribe();
+        let generation = *receiver.borrow();
+        Self {
+            receiver,
+            generation,
+        }
+    }
+}
+async fn wait_for_shutdown(shutdown: &mut ShutdownSignal) {
+    loop {
+        if *shutdown.receiver.borrow_and_update() != shutdown.generation {
+            return;
+        }
+        if shutdown.receiver.changed().await.is_err() {
+            return;
+        }
+    }
+}
+
+fn validate_remote_id(local: &PeerId, remote: &PeerId) -> Result<(), NetworkError> {
+    PeerId::new(remote.as_str())?;
+    if local == remote {
+        return Err(NetworkError::HandshakeFailed(
+            "self peer ID is not permitted".into(),
+        ));
+    }
+    Ok(())
 }

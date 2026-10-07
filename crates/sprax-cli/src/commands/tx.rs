@@ -123,12 +123,12 @@ pub(crate) fn execute(args: &TxArgs) -> anyhow::Result<()> {
             println!("============================================================");
             println!("  TRANSACTION SUBMITTED");
             println!("============================================================");
-            println!("  Tx Hash          : {}", tx_hash);
-            println!("  Sender           : {} ({})", sender_addr, from);
-            println!("  Recipient        : {} ({})", recipient_addr, to);
-            println!("  Amount Sent      : {}", transfer_amount);
-            println!("  Fee Paid         : {}", fee_amount);
-            println!("  Tx Nonce         : {}", current_nonce);
+            println!("  Tx Hash          : {tx_hash}");
+            println!("  Sender           : {sender_addr} ({from})");
+            println!("  Recipient        : {recipient_addr} ({to})");
+            println!("  Amount Sent      : {transfer_amount}");
+            println!("  Fee Paid         : {fee_amount}");
+            println!("  Tx Nonce         : {current_nonce}");
 
             if node.config().consensus.enabled {
                 // Multi-validator mode: leave the tx in the mempool for `ConsensusDriver` to
@@ -147,8 +147,8 @@ pub(crate) fn execute(args: &TxArgs) -> anyhow::Result<()> {
                 println!("  Included Block   : #{}", block.header.height);
                 println!("------------------------------------------------------------");
                 println!("  Updated Balances:");
-                println!("  - Sender ({})    : {}", from, sender_after.balance);
-                println!("  - Recipient ({}) : {}", to, recipient_after.balance);
+                println!("  - Sender ({from})    : {}", sender_after.balance);
+                println!("  - Recipient ({to}) : {}", recipient_after.balance);
                 println!("============================================================");
             }
         }

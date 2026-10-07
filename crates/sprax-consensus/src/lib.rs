@@ -1,7 +1,11 @@
+pub mod commit;
 pub mod engine;
+pub use commit::{verify_block_commit, verify_prevote_quorum};
 pub mod error;
 pub mod evidence;
+pub mod proposal;
 pub mod round;
+pub use proposal::SignedProposal;
 pub mod staking;
 pub mod validator;
 pub mod vote;

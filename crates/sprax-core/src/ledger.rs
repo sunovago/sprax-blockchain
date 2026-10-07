@@ -5,9 +5,9 @@ use crate::{
     state::{AccountState, StateAccessor},
 };
 use sprax_crypto::Hasher;
-use sprax_storage::{ChainMetaStore, KVStore, MemKVStore, StateCommitment};
+use sprax_storage::{ChainMetaStore, KVStore, MemKVStore, OverlayStore, StateCommitment};
 use sprax_types::{
-    Address, Block, BlockBody, BlockHeader, Hash32, Transaction, TxMessage, TxReceipt,
+    Address, Amount, Block, BlockBody, BlockHeader, Hash32, Transaction, TxMessage, TxReceipt,
 };
 use std::collections::HashMap;
 
@@ -17,7 +17,8 @@ use std::collections::HashMap;
 /// type (no explicit `<S>`) keeps compiling unchanged; `sprax-node` opts into a durable
 /// backend explicitly (`ChainLedger<RedbStore>`).
 #[derive(Debug)]
-pub struct ChainLedger<S: KVStore + StateCommitment + ChainMetaStore + Clone = MemKVStore> {
+pub struct ChainLedger<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static = MemKVStore>
+{
     genesis: GenesisConfig,
     store: S,
     blocks: Vec<Block>,
@@ -27,7 +28,7 @@ pub struct ChainLedger<S: KVStore + StateCommitment + ChainMetaStore + Clone = M
     executor: TxExecutor,
 }
 
-impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
+impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedger<S> {
     /// Initializes a fresh blockchain ledger from a genesis specification against `store`,
     /// persisting the genesis block so a subsequent [`Self::open_or_init`] against the same
     /// store recognizes state already exists.
@@ -35,7 +36,21 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         genesis: GenesisConfig,
         store: S,
     ) -> Result<Self, CoreError> {
-        let genesis_header = genesis.initialize_state(&store)?;
+        if store
+            .get_height()
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .is_some()
+            || !store
+                .scan_prefix(b"")
+                .map_err(|e| CoreError::StateError(e.to_string()))?
+                .is_empty()
+        {
+            return Err(CoreError::StateError(
+                "refusing to initialize genesis over existing chain data".into(),
+            ));
+        }
+        let pending = OverlayStore::new(store.clone());
+        let genesis_header = genesis.initialize_state(&pending)?;
 
         let genesis_block = Block {
             header: genesis_header.clone(),
@@ -49,9 +64,12 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         let mut block_by_hash = HashMap::new();
         block_by_hash.insert(genesis_hash, 0);
 
-        Self::persist_block(&store, 0, &genesis_block, genesis_hash)?;
-        store
+        ChainLedger::<OverlayStore<S>>::persist_block(&pending, 0, &genesis_block, genesis_hash)?;
+        pending
             .put_height(0)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        pending
+            .commit_chain()
             .map_err(|e| CoreError::StateError(e.to_string()))?;
 
         Ok(Self {
@@ -87,7 +105,17 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         store: S,
         height: u64,
     ) -> Result<Self, CoreError> {
-        let mut blocks = Vec::with_capacity(height as usize + 1);
+        let identity = store.get(GenesisConfig::IDENTITY_KEY)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .ok_or_else(|| CoreError::StateError("legacy database has no pinned genesis identity; explicit migration or a separate new chain directory is required".into()))?;
+        if identity.as_slice() != genesis.fingerprint()?.as_bytes() {
+            return Err(CoreError::StateError(
+                "configured genesis does not match persisted chain identity".into(),
+            ));
+        }
+        let expected_genesis = genesis.initialize_state(&sprax_storage::MemKVStore::new())?;
+        // Do not allocate from untrusted/corrupted height metadata before reading blocks.
+        let mut blocks: Vec<Block> = Vec::new();
         let mut block_by_hash = HashMap::new();
         let mut tx_index = HashMap::new();
 
@@ -100,6 +128,30 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
                 })?;
             let block: Block = serde_json::from_slice(&block_bytes)
                 .map_err(|e| CoreError::StateError(format!("block decode error: {e}")))?;
+            if block.header.height != h || block.header.chain_id != genesis.chain_id {
+                return Err(CoreError::StateError(
+                    "persisted block height or chain identity mismatch".into(),
+                ));
+            }
+            if h == 0 {
+                if block.header != expected_genesis
+                    || !block.body.transactions.is_empty()
+                    || !block.last_commit.is_empty()
+                {
+                    return Err(CoreError::StateError("persisted genesis/header commitment differs from this protocol; explicit migration required".into()));
+                }
+            } else if let Some(previous) = blocks.last() {
+                if block.header.parent_hash
+                    != Hasher::block_hash(&previous.header)
+                        .map_err(|e| CoreError::StateError(e.to_string()))?
+                    || block.header.version != 1
+                    || block.header.timestamp_unix_secs <= previous.header.timestamp_unix_secs
+                {
+                    return Err(CoreError::StateError(
+                        "persisted block ancestry or timestamp is invalid".into(),
+                    ));
+                }
+            }
             let block_hash = Hasher::block_hash(&block.header)
                 .map_err(|e| CoreError::StateError(e.to_string()))?;
             block_by_hash.insert(block_hash, h);
@@ -120,6 +172,15 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
             }
 
             blocks.push(block);
+        }
+
+        if blocks
+            .last()
+            .is_none_or(|block| store.compute_root().ok() != Some(block.header.state_root))
+        {
+            return Err(CoreError::StateError(
+                "persisted state root does not match finalized tip".into(),
+            ));
         }
 
         Ok(Self {
@@ -207,8 +268,70 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         StateAccessor::get_account(&self.store, addr)
     }
 
+    pub fn get_supply_state(&self) -> Result<crate::state::SupplyState, CoreError> {
+        StateAccessor::get_supply_state(&self.store)
+    }
+
+    pub fn get_validator_stake(
+        &self,
+        validator: &Address,
+    ) -> Result<crate::state::ValidatorStakeState, CoreError> {
+        StateAccessor::get_validator_stake(&self.store, validator)
+    }
+
+    pub fn get_delegation(
+        &self,
+        delegator: &Address,
+        validator: &Address,
+    ) -> Result<crate::state::DelegationState, CoreError> {
+        StateAccessor::get_delegation(&self.store, delegator, validator)
+    }
+
+    pub fn canonical_delegations(
+        &self,
+        delegator: &Address,
+    ) -> Result<Vec<(Address, crate::state::DelegationState)>, CoreError> {
+        StateAccessor::delegations_for(&self.store, delegator)
+    }
+    pub fn canonical_unbonding_count(&self, delegator: &Address) -> Result<usize, CoreError> {
+        Ok(self
+            .store
+            .scan_prefix(&StateAccessor::delegator_unbonding_prefix(delegator))
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .len())
+    }
+
+    pub fn validator_registry(
+        &self,
+    ) -> Result<Vec<crate::validator_lifecycle::ValidatorRecord>, CoreError> {
+        crate::validator_lifecycle::registry(&self.store)
+    }
+
+    /// Derives consensus power solely from committed registry, eligibility and stake.
+    pub fn active_validators(&self) -> Result<Vec<sprax_types::CanonicalValidator>, CoreError> {
+        crate::validator_set::canonical_validator_set(&self.genesis, &self.store)
+    }
+
+    pub fn active_validator_set_hash(&self) -> Result<Hash32, CoreError> {
+        crate::validator_set::validator_set_hash(&self.active_validators()?)
+    }
+
     /// Submits a signed transaction into the local mempool after pre-validation.
     pub fn submit_transaction(&mut self, tx: Transaction) -> Result<Hash32, CoreError> {
+        if self.mempool.len() >= 128 {
+            return Err(CoreError::ModuleError {
+                module: "mempool".into(),
+                reason: "mempool is full; retry after a block is finalized".into(),
+            });
+        }
+        let encoded =
+            serde_json::to_vec(&tx).map_err(|error| CoreError::StateError(error.to_string()))?;
+        if encoded.len() > 2 * 1024 * 1024 {
+            return Err(CoreError::ModuleError {
+                module: "mempool".into(),
+                reason: "transaction exceeds the 2 MiB admission limit".into(),
+            });
+        }
         let tx_hash = Hasher::tx_hash(&tx).map_err(|e| CoreError::StateError(e.to_string()))?;
 
         // Check if already in tx index or mempool
@@ -242,7 +365,14 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
 
         let mut total_transfer_cost = sprax_types::Amount::ZERO;
         for msg in &tx.body.messages {
-            if let TxMessage::Transfer { amount, .. } = msg {
+            if let TxMessage::Transfer { amount, .. }
+            | TxMessage::Delegate { amount, .. }
+            | TxMessage::RegisterValidator {
+                self_stake: amount, ..
+            }
+            | TxMessage::InstantiateContract { funds: amount, .. }
+            | TxMessage::ContractCall { funds: amount, .. } = msg
+            {
                 total_transfer_cost = total_transfer_cost
                     .checked_add(*amount)
                     .map_err(|e| CoreError::StateError(e.to_string()))?;
@@ -263,33 +393,192 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         Ok(tx_hash)
     }
 
+    fn apply_block_reward(&self, height: u64, proposer: Address) -> Result<(), CoreError> {
+        let reward = self.genesis.consensus_params.block_reward_at_height(height);
+        if reward.is_zero() {
+            return Ok(());
+        }
+
+        let mut supply = StateAccessor::get_supply_state(&self.store)?;
+        let headroom = self
+            .genesis
+            .consensus_params
+            .max_supply
+            .checked_sub(supply.circulating_supply)
+            .unwrap_or(Amount::ZERO);
+        let actual_reward = if reward < headroom { reward } else { headroom };
+        if actual_reward.is_zero() {
+            return Ok(());
+        }
+
+        let mut proposer_state = StateAccessor::get_account(&self.store, &proposer)?;
+        proposer_state.balance = proposer_state
+            .balance
+            .checked_add(actual_reward)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        StateAccessor::set_account(&self.store, &proposer, &proposer_state)?;
+
+        supply.circulating_supply = supply
+            .circulating_supply
+            .checked_add(actual_reward)
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        StateAccessor::set_supply_state(&self.store, &supply)?;
+
+        Ok(())
+    }
+
+    fn sweep_matured_unbondings(&self, height: u64) -> Result<(), CoreError> {
+        let matured = StateAccessor::scan_matured_unbondings(&self.store, height)?;
+        for (key, entry) in matured {
+            let mut delegator_state = StateAccessor::get_account(&self.store, &entry.delegator)?;
+            delegator_state.balance = delegator_state
+                .balance
+                .checked_add(entry.amount)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            StateAccessor::set_account(&self.store, &entry.delegator, &delegator_state)?;
+            self.store
+                .delete(&StateAccessor::delegator_unbonding_index_key(
+                    &entry.delegator,
+                    &key,
+                ))
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            self.store
+                .delete(&StateAccessor::unbonding_index_key(&entry.validator, &key))
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+            self.store
+                .delete(&key)
+                .map_err(|e| CoreError::StateError(e.to_string()))?;
+        }
+        Ok(())
+    }
+
     /// Mines a new block from all pending transactions in the mempool.
+    pub fn build_proposal(&self, proposer: Address) -> Result<Block, CoreError> {
+        self.staged().mine_block_inner(proposer)
+    }
+
+    pub fn validate_proposal(&self, block: Block) -> Result<Vec<TxReceipt>, CoreError> {
+        self.staged().apply_block_inner(block)
+    }
+
     pub fn mine_block(&mut self, proposer: Address) -> Result<Block, CoreError> {
+        let mut staged = self.staged();
+        let block = staged.mine_block_inner(proposer)?;
+        staged
+            .store
+            .commit_chain()
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        self.accept_staged(staged);
+        Ok(block)
+    }
+
+    fn staged(&self) -> ChainLedger<OverlayStore<S>> {
+        ChainLedger {
+            genesis: self.genesis.clone(),
+            store: OverlayStore::new(self.store.clone()),
+            blocks: self.blocks.clone(),
+            block_by_hash: self.block_by_hash.clone(),
+            tx_index: self.tx_index.clone(),
+            mempool: self.mempool.clone(),
+            executor: self.executor.clone(),
+        }
+    }
+
+    fn accept_staged(&mut self, staged: ChainLedger<OverlayStore<S>>) {
+        self.blocks = staged.blocks;
+        self.block_by_hash = staged.block_by_hash;
+        self.tx_index = staged.tx_index;
+        self.mempool = staged.mempool;
+    }
+
+    fn mine_block_inner(&mut self, proposer: Address) -> Result<Block, CoreError> {
         let current_height = self.height() + 1;
-        let (parent_hash, parent_timestamp, val_set_hash) = {
+        let (parent_hash, parent_timestamp) = {
             let parent_header = self.latest_header();
             let hash = Hasher::block_hash(parent_header)
                 .map_err(|e| CoreError::StateError(e.to_string()))?;
-            (
-                hash,
-                parent_header.timestamp_unix_secs,
-                parent_header.validator_set_hash,
-            )
+            (hash, parent_header.timestamp_unix_secs)
         };
 
+        // The height H certificate uses the validator set from finalized state H-1.
+        let val_set_hash = self.active_validator_set_hash()?;
         let pending_txs = std::mem::take(&mut self.mempool);
         let mut executed_txs = Vec::with_capacity(pending_txs.len());
         let mut receipts = Vec::with_capacity(pending_txs.len());
         let mut tx_hashes = Vec::with_capacity(pending_txs.len());
+        let mut reserved_gas = 0u64;
+        // Reserve the complete worst-case certificate before selecting transactions.
+        // JSON byte arrays vary with the values of hashes/signatures, so use 255s
+        // and maximum integer widths rather than the unsigned proposal's length.
+        let worst_hash = Hash32::new([255; 32]);
+        let envelope = Block {
+            header: BlockHeader {
+                version: 1,
+                chain_id: self.genesis.chain_id.clone(),
+                height: current_height,
+                timestamp_unix_secs: parent_timestamp + 2,
+                parent_hash,
+                proposer,
+                state_root: worst_hash,
+                txs_root: worst_hash,
+                receipts_root: worst_hash,
+                validator_set_hash: val_set_hash,
+            },
+            body: BlockBody::default(),
+            last_commit: self
+                .active_validators()?
+                .iter()
+                .map(|validator| sprax_types::CommitSignature {
+                    round: u32::MAX,
+                    validator_address: validator.address,
+                    signature: vec![255; 64],
+                    timestamp_unix_secs: u64::MAX,
+                })
+                .collect(),
+        };
+        let mut reserved_bytes = serde_json::to_vec(&envelope)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .len();
+        if reserved_bytes > self.genesis.consensus_params.max_block_size_bytes {
+            return Err(CoreError::StateError(
+                "block limit cannot fit validator certificate".into(),
+            ));
+        }
+
+        crate::validator_lifecycle::record_active_set(
+            &self.store,
+            current_height,
+            self.genesis.consensus_params.unbonding_period_blocks,
+            &self.active_validators()?,
+        )?;
 
         for tx in pending_txs {
-            match self.executor.execute_transaction(
+            let bytes = serde_json::to_vec(&tx)
+                .map_err(|e| CoreError::StateError(e.to_string()))?
+                .len();
+            let next_gas = reserved_gas.checked_add(tx.body.fee.gas_limit);
+            // One comma per transaction is a conservative array separator bound.
+            let next_bytes = reserved_bytes
+                .checked_add(bytes)
+                .and_then(|n| n.checked_add(1));
+            if next_gas.is_none_or(|gas| gas > self.genesis.consensus_params.max_block_gas)
+                || next_bytes
+                    .is_none_or(|size| size > self.genesis.consensus_params.max_block_size_bytes)
+            {
+                self.mempool.push(tx);
+                continue;
+            }
+            match self.executor.execute_transaction_at_time(
                 &self.store,
                 &tx,
                 current_height,
+                parent_timestamp + 2,
                 &self.genesis.chain_id,
+                self.genesis.consensus_params.unbonding_period_blocks,
             ) {
                 Ok(receipt) => {
+                    reserved_gas = next_gas.expect("validated gas bound");
+                    reserved_bytes = next_bytes.expect("validated size bound");
                     let hash = receipt.tx_hash;
                     tx_hashes.push(hash);
                     receipts.push(receipt.clone());
@@ -304,6 +593,9 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
                 }
             }
         }
+
+        self.apply_block_reward(current_height, proposer)?;
+        self.sweep_matured_unbondings(current_height)?;
 
         let state_root = self.state_root()?;
         let txs_root = Hasher::merkle_root(&tx_hashes);
@@ -349,6 +641,17 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
 
     /// Validates and applies an externally received block to the local ledger (for gossip / synchronization).
     pub fn apply_block(&mut self, block: Block) -> Result<Vec<TxReceipt>, CoreError> {
+        let mut staged = self.staged();
+        let receipts = staged.apply_block_inner(block)?;
+        staged
+            .store
+            .commit_chain()
+            .map_err(|e| CoreError::StateError(e.to_string()))?;
+        self.accept_staged(staged);
+        Ok(receipts)
+    }
+
+    fn apply_block_inner(&mut self, block: Block) -> Result<Vec<TxReceipt>, CoreError> {
         let block_height = block.header.height;
         let local_height = self.height();
 
@@ -379,6 +682,41 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
                 ),
             });
         }
+        if block.header.version != 1
+            || block.header.timestamp_unix_secs <= self.latest_header().timestamp_unix_secs
+        {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "invalid block version or non-increasing timestamp".into(),
+            });
+        }
+        let size = serde_json::to_vec(&block)
+            .map_err(|e| CoreError::StateError(e.to_string()))?
+            .len();
+        if size > self.genesis.consensus_params.max_block_size_bytes {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "block exceeds size limit".into(),
+            });
+        }
+        let reserved_gas = block
+            .body
+            .transactions
+            .iter()
+            .try_fold(0u64, |sum, tx| sum.checked_add(tx.body.fee.gas_limit));
+        if reserved_gas.is_none_or(|gas| gas > self.genesis.consensus_params.max_block_gas) {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "block exceeds gas limit".into(),
+            });
+        }
+
+        if block.header.validator_set_hash != self.active_validator_set_hash()? {
+            return Err(CoreError::ModuleError {
+                module: "consensus".into(),
+                reason: "block validator-set commitment mismatch".into(),
+            });
+        }
 
         // 4. Verify Parent Hash
         let expected_parent_hash = Hasher::block_hash(self.latest_header())
@@ -393,16 +731,25 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
             });
         }
 
+        crate::validator_lifecycle::record_active_set(
+            &self.store,
+            block_height,
+            self.genesis.consensus_params.unbonding_period_blocks,
+            &self.active_validators()?,
+        )?;
+
         // 5. Execute all transactions in the block
         let mut tx_hashes = Vec::with_capacity(block.body.transactions.len());
         let mut receipts = Vec::with_capacity(block.body.transactions.len());
 
         for tx in &block.body.transactions {
-            let receipt = self.executor.execute_transaction(
+            let receipt = self.executor.execute_transaction_at_time(
                 &self.store,
                 tx,
                 block_height,
+                block.header.timestamp_unix_secs,
                 &self.genesis.chain_id,
+                self.genesis.consensus_params.unbonding_period_blocks,
             )?;
             let hash = receipt.tx_hash;
             tx_hashes.push(hash);
@@ -413,6 +760,8 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         }
 
         // 6. Verify Computed State Root matches Header State Root
+        self.apply_block_reward(block_height, block.header.proposer)?;
+        self.sweep_matured_unbondings(block_height)?;
         let computed_state_root = self.state_root()?;
         if computed_state_root != block.header.state_root {
             return Err(CoreError::ModuleError {
@@ -497,6 +846,25 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone> ChainLedger<S> {
         self.tx_index
             .get(hash)
             .map(|(tx, receipt, h)| (tx, receipt, *h))
+    }
+
+    pub fn query_contract(
+        &self,
+        address: Address,
+        msg: &[u8],
+        gas: u64,
+    ) -> Result<sprax_wasm::RuntimeResult, CoreError> {
+        let context = sprax_wasm::ContractContext {
+            chain_id: self.chain_id().into(),
+            height: self.height(),
+            timestamp: self.latest_header().timestamp_unix_secs,
+            sender: Address::ZERO,
+            nonce: 0,
+            message_index: 0,
+        };
+        sprax_wasm::CosmWasmRuntime
+            .query(&self.store, address, &context, msg, gas)
+            .map_err(CoreError::ExecutionReverted)
     }
 
     /// Overwrites the finalized commit signatures on a already-committed block (called once a

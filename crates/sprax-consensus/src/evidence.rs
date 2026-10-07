@@ -14,11 +14,30 @@ pub struct EquivocationEvidence {
 
 impl EquivocationEvidence {
     pub fn is_valid_equivocation(&self) -> bool {
-        self.vote_a.validator_address == self.vote_b.validator_address
+        self.validator_address == self.vote_a.validator_address
+            && self.vote_a.genesis == self.vote_b.genesis
+            && self.height == self.vote_a.height
+            && self.round == self.vote_a.round
+            && self.vote_a.validator_address == self.vote_b.validator_address
             && self.vote_a.height == self.vote_b.height
             && self.vote_a.round == self.vote_b.round
             && self.vote_a.vote_type == self.vote_b.vote_type
             && self.vote_a.block_hash != self.vote_b.block_hash
+    }
+
+    pub fn verify_signatures(&self, public_key: &[u8]) -> Result<(), crate::ConsensusError> {
+        if !self.is_valid_equivocation() {
+            return Err(crate::ConsensusError::InvalidVote(
+                "invalid equivocation metadata".into(),
+            ));
+        }
+        for vote in [&self.vote_a, &self.vote_b] {
+            sprax_crypto::Ed25519Keypair::verify(public_key, &vote.sign_bytes()?, &vote.signature)
+                .map_err(|e| {
+                    crate::ConsensusError::InvalidVote(format!("forged equivocation evidence: {e}"))
+                })?;
+        }
+        Ok(())
     }
 }
 
@@ -32,6 +51,7 @@ mod tests {
     fn test_equivocation_validation() {
         let addr = Address::new([5u8; 20]);
         let vote1 = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             100,
             0,
@@ -40,6 +60,7 @@ mod tests {
             vec![1; 64],
         );
         let vote2 = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             100,
             0,

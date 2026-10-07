@@ -1,0 +1,78 @@
+name: Mainnet hardening verification
+
+on:
+  push:
+    branches: ["codex/mainnet-hardening-*"]
+  pull_request:
+    paths: ["crates/**", "Cargo.toml", "Cargo.lock", "rust-toolchain.toml", ".github/workflows/mainnet-hardening.yml"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: mainnet-hardening-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+      RUST_BACKTRACE: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@1.88.0
+        with:
+          components: rustfmt, clippy
+          targets: wasm32-unknown-unknown
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Verify browser SDK transaction fixtures
+        working-directory: packages/sprax-wallet-core
+        run: |
+          npm ci
+          npm run export:node-fixture
+          git diff --exit-code -- ../../contracts/fixtures/wallet-transactions.json
+      - name: Verify formatting
+        run: cargo fmt --all -- --check
+      - name: Install pinned WASM optimizer
+        run: |
+          curl --fail --location --retry 3 https://github.com/WebAssembly/binaryen/releases/download/version_123/binaryen-version_123-x86_64-linux.tar.gz --output "$RUNNER_TEMP/binaryen.tar.gz"
+          echo "e959f2170af4c20c552e9de3a0253704d6a9d2766e8fdb88e4d6ac4bae9388fe  $RUNNER_TEMP/binaryen.tar.gz" | sha256sum --check
+          tar -xzf "$RUNNER_TEMP/binaryen.tar.gz" -C "$RUNNER_TEMP"
+          echo "$RUNNER_TEMP/binaryen-version_123/bin" >> "$GITHUB_PATH"
+      - name: Run workspace regression and integration tests
+        run: |
+          bash scripts/build_wasm_fixture.sh
+          export SPRX_TEST_CONTRACT_WASM="$GITHUB_WORKSPACE/contracts/examples/counter/target/wasm32-unknown-unknown/release/sprax_counter.wasm"
+          cargo test --workspace --all-features --locked
+      - name: Verify lint checks
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+  frontend:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        directory: [apps/admin-panel, apps/explorer-ui, apps/web-wallet, packages/sprax-wallet-core]
+    defaults:
+      run:
+        working-directory: ${{ matrix.directory }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Build wallet SDK dependency
+        if: matrix.directory == 'apps/web-wallet'
+        working-directory: packages/sprax-wallet-core
+        run: |
+          npm ci
+          npm run build
+      - run: npm ci
+      - run: npm run build
+      - run: npm run test --if-present

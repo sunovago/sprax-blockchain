@@ -21,6 +21,9 @@ serde_json.workspace = true
 hex.workspace = true
 tracing.workspace = true
 parking_lot.workspace = true
+cosmwasm-vm.workspace = true
+cosmwasm-std.workspace = true
+wasmparser = "=0.216.1"
 
 [dev-dependencies]
 tempfile.workspace = true

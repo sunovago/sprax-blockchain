@@ -28,16 +28,30 @@ fn synthetic_block(height: u64) -> Block {
 
 fn build_service(
     port: u16,
-    inbound_block_tx: mpsc::UnboundedSender<Block>,
+    inbound_block_tx: mpsc::Sender<Block>,
     block_fetch_fn: BlockFetchFn,
 ) -> P2pService {
+    build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            ..Default::default()
+        },
+        inbound_block_tx,
+        block_fetch_fn,
+    )
+}
+
+fn build_service_with_config(
+    config: NetworkConfig,
+    inbound_block_tx: mpsc::Sender<Block>,
+    block_fetch_fn: BlockFetchFn,
+) -> P2pService {
+    let port = config.p2p_port;
     let peer_id = PeerId::new(format!("node-{port}")).unwrap();
-    let (tx_tx, _tx_rx) = mpsc::unbounded_channel();
-    let (vote_tx, _vote_rx) = mpsc::unbounded_channel();
-    let (proposal_tx, _proposal_rx) = mpsc::unbounded_channel();
-    let (evidence_tx, _evidence_rx) = mpsc::unbounded_channel();
-    let mut config = NetworkConfig::default();
-    config.p2p_port = port;
+    let (tx_tx, _tx_rx) = mpsc::channel(128);
+    let (vote_tx, _vote_rx) = mpsc::channel(128);
+    let (proposal_tx, _proposal_rx) = mpsc::channel(128);
+    let (evidence_tx, _evidence_rx) = mpsc::channel(128);
     P2pService::new(
         peer_id,
         "sprax-devnet-1".to_string(),
@@ -52,18 +66,107 @@ fn build_service(
 }
 
 #[tokio::test]
+async fn reconnect_handshake_uses_the_latest_finalized_tip() {
+    let reserved = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+    let port = reserved.local_addr().unwrap().port();
+    let (server_blocks, _) = mpsc::channel(8);
+    let server = build_service(
+        port,
+        server_blocks,
+        Arc::new(|from, to| (from..=to.min(3)).map(synthetic_block).collect()),
+    );
+    drop(reserved);
+    server.start(0, Hash32::ZERO).await.unwrap();
+    let latest_hash = sprax_crypto::Hasher::block_hash(&synthetic_block(3).header).unwrap();
+    server.update_finalized_tip(3, latest_hash);
+    server.update_finalized_tip(1, Hash32::ZERO);
+    let (blocks, mut incoming) = mpsc::channel(8);
+    let client = build_service(0, blocks, Arc::new(|_, _| Vec::new()));
+    client
+        .dial_peer(&format!("127.0.0.1:{port}"), 0, Hash32::ZERO)
+        .await
+        .unwrap();
+    for height in 1..=3 {
+        let block = tokio::time::timeout(Duration::from_secs(3), incoming.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(block.header.height, height);
+    }
+    let peer = client.connected_peers().pop().unwrap();
+    assert_eq!(peer.height, 3);
+    assert_eq!(peer.latest_block_hash, latest_hash);
+    client.stop();
+    server.stop();
+}
+
+#[tokio::test]
+async fn oversized_handshakes_are_closed_and_pending_connections_count_towards_the_limit() {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let port = 37_950;
+    let (blocks, _receiver) = mpsc::channel(8);
+    let service = build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            max_inbound_peers: 1,
+            max_outbound_peers: 0,
+            ..Default::default()
+        },
+        blocks,
+        Arc::new(|_, _| Vec::new()),
+    );
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let mut first = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    first.write_all(&u32::MAX.to_be_bytes()).await.unwrap();
+    let mut byte = [0u8; 1];
+    let closed = tokio::time::timeout(Duration::from_secs(2), first.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(
+        closed.is_err() || closed.unwrap() == 0,
+        "oversized handshake must be rejected before allocation"
+    );
+    drop(first);
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let silent = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    let mut excess = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let closed = tokio::time::timeout(Duration::from_secs(2), excess.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(
+        closed.is_err() || closed.unwrap() == 0,
+        "a pending handshake must occupy a connection slot"
+    );
+    assert!(service
+        .dial_peer("127.0.0.1:1", 0, Hash32::ZERO)
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("connection limit"));
+    drop(silent);
+    service.stop();
+}
+
+#[tokio::test]
 async fn test_get_blocks_request_response_round_trip_over_real_tcp() {
     let high_port = 38_900u16;
     let low_port = 38_901u16;
 
     // The "ahead" node (height 5) serves blocks 1..=5 out of its in-memory store when asked.
-    let (high_block_tx, mut high_block_rx) = mpsc::unbounded_channel();
+    let (high_block_tx, mut high_block_rx) = mpsc::channel(128);
     let fetch_fn: BlockFetchFn = Arc::new(|from, to| (from..=to).map(synthetic_block).collect());
     let high = build_service(high_port, high_block_tx, fetch_fn);
     high.start(5, Hash32::new([5u8; 32])).await.unwrap();
 
     // The "behind" node (height 0) has nothing to serve and just observes what it catches up on.
-    let (low_block_tx, mut low_block_rx) = mpsc::unbounded_channel();
+    let (low_block_tx, mut low_block_rx) = mpsc::channel(128);
     let empty_fetch_fn: BlockFetchFn = Arc::new(|_, _| vec![]);
     let low = build_service(low_port, low_block_tx, empty_fetch_fn);
     low.start(0, Hash32::ZERO).await.unwrap();
@@ -101,4 +204,182 @@ async fn test_get_blocks_request_response_round_trip_over_real_tcp() {
 
     high.stop();
     low.stop();
+}
+
+#[test]
+fn bounded_encoding_checks_exact_payload_size() {
+    use sprax_network::NetworkMessage;
+    let msg = NetworkMessage::Ping { nonce: 42 };
+    let framed = msg.encode().unwrap();
+    let size = framed.len() - 4;
+    assert_eq!(msg.encode_bounded(size).unwrap(), framed);
+    assert!(msg.encode_bounded(size - 1).is_err());
+    assert!(msg.encode_bounded(0).is_err());
+}
+
+async fn raw_handshake(port: u16, peer: &str) -> tokio::net::TcpStream {
+    use sprax_network::NetworkMessage;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let mut stream = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    let handshake = NetworkMessage::Handshake {
+        peer_id: PeerId::new(peer).unwrap(),
+        chain_id: "sprax-devnet-1".into(),
+        height: 0,
+        latest_block_hash: Hash32::ZERO,
+        listen_addr: None,
+    };
+    stream
+        .write_all(&handshake.encode().unwrap())
+        .await
+        .unwrap();
+    let mut length = [0; 4];
+    tokio::time::timeout(Duration::from_secs(2), stream.read_exact(&mut length))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut ack = vec![0; u32::from_be_bytes(length) as usize];
+    stream.read_exact(&mut ack).await.unwrap();
+    assert!(matches!(
+        NetworkMessage::decode(&ack).unwrap(),
+        NetworkMessage::HandshakeAck { .. }
+    ));
+    stream
+}
+
+#[tokio::test]
+async fn configured_frame_limit_and_duplicate_peer_rejection_over_tcp() {
+    use sprax_network::NetworkMessage;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let port = 37_951;
+    let (blocks, _receiver) = mpsc::channel(8);
+    let service = build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            max_message_size_bytes: 128,
+            ..Default::default()
+        },
+        blocks,
+        Arc::new(|_, _| Vec::new()),
+    );
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let mut first = raw_handshake(port, "same-peer").await;
+    let mut duplicate = raw_handshake(port, "same-peer").await;
+    let mut byte = [0; 1];
+    let result = tokio::time::timeout(Duration::from_secs(2), duplicate.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(result.is_err() || result.unwrap() == 0);
+    assert_eq!(service.connected_peers_count(), 1);
+    // The first socket remains routed and usable after rejecting the duplicate.
+    first
+        .write_all(&NetworkMessage::Ping { nonce: 7 }.encode().unwrap())
+        .await
+        .unwrap();
+    let mut length = [0; 4];
+    tokio::time::timeout(Duration::from_secs(2), first.read_exact(&mut length))
+        .await
+        .unwrap()
+        .unwrap();
+    let mut pong = vec![0; u32::from_be_bytes(length) as usize];
+    first.read_exact(&mut pong).await.unwrap();
+    assert_eq!(
+        NetworkMessage::decode(&pong).unwrap(),
+        NetworkMessage::Pong { nonce: 7 }
+    );
+    // Only the prefix is sent: rejection must happen before payload allocation/read.
+    first.write_all(&129u32.to_be_bytes()).await.unwrap();
+    let result = tokio::time::timeout(Duration::from_secs(2), first.read(&mut byte))
+        .await
+        .unwrap();
+    assert!(result.is_err() || result.unwrap() == 0);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    while service.connected_peers_count() != 0 {
+        assert!(tokio::time::Instant::now() < deadline);
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    service.stop();
+}
+
+#[tokio::test]
+async fn stop_closes_pending_handshakes_active_sockets_and_releases_listener() {
+    use tokio::io::AsyncReadExt;
+    let port = 37_952;
+    let (blocks, _receiver) = mpsc::channel(8);
+    let service = build_service_with_config(
+        NetworkConfig {
+            p2p_port: port,
+            ..Default::default()
+        },
+        blocks,
+        Arc::new(|_, _| Vec::new()),
+    );
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let mut active = raw_handshake(port, "shutdown-peer").await;
+    let mut pending = tokio::net::TcpStream::connect(("127.0.0.1", port))
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(50)).await;
+    service.stop();
+    for socket in [&mut active, &mut pending] {
+        let mut byte = [0; 1];
+        let result = tokio::time::timeout(Duration::from_secs(2), socket.read(&mut byte))
+            .await
+            .unwrap();
+        assert!(result.is_err() || result.unwrap() == 0);
+    }
+    assert_eq!(service.connected_peers_count(), 0);
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
+    let listener = loop {
+        match tokio::net::TcpListener::bind(("0.0.0.0", port)).await {
+            Ok(listener) => break listener,
+            Err(_) => {
+                assert!(
+                    tokio::time::Instant::now() < deadline,
+                    "stop must release the listening port"
+                );
+                tokio::time::sleep(Duration::from_millis(10)).await;
+            }
+        }
+    };
+    // A failed bind must not leave is_running=true and turn the next start into a no-op.
+    assert!(service.start(0, Hash32::ZERO).await.is_err());
+    drop(listener);
+    service.start(0, Hash32::ZERO).await.unwrap();
+    let _restarted = raw_handshake(port, "restart-peer").await;
+    service.stop();
+}
+
+#[tokio::test]
+async fn simultaneous_dials_keep_one_shared_connection_and_bidirectional_delivery() {
+    let (a_blocks, mut a_receiver) = mpsc::channel(8);
+    let (b_blocks, mut b_receiver) = mpsc::channel(8);
+    let a = build_service(37_953, a_blocks, Arc::new(|_, _| Vec::new()));
+    let b = build_service(37_954, b_blocks, Arc::new(|_, _| Vec::new()));
+    a.start(0, Hash32::ZERO).await.unwrap();
+    b.start(0, Hash32::ZERO).await.unwrap();
+    let (left, right) = tokio::join!(
+        a.dial_peer("127.0.0.1:37954", 0, Hash32::ZERO),
+        b.dial_peer("127.0.0.1:37953", 0, Hash32::ZERO),
+    );
+    left.unwrap();
+    right.unwrap();
+    tokio::time::sleep(Duration::from_millis(200)).await;
+    assert_eq!(a.connected_peers_count(), 1);
+    assert_eq!(b.connected_peers_count(), 1);
+    a.broadcast_block(synthetic_block(1));
+    b.broadcast_block(synthetic_block(2));
+    let received_a = tokio::time::timeout(Duration::from_secs(2), a_receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    let received_b = tokio::time::timeout(Duration::from_secs(2), b_receiver.recv())
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(received_a.header.height, 2);
+    assert_eq!(received_b.header.height, 1);
+    a.stop();
+    b.stop();
 }

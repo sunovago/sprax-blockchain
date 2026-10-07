@@ -11,6 +11,7 @@ description = "Node service runtime, configuration manager, environment profiles
 workspace = true
 
 [dependencies]
+redb.workspace = true
 sprax-types.workspace = true
 sprax-crypto.workspace = true
 sprax-storage = { workspace = true, features = ["redb-store"] }
@@ -27,7 +28,7 @@ tracing-subscriber.workspace = true
 parking_lot.workspace = true
 hex.workspace = true
 axum.workspace = true
-tower.workspace = true
+tower = { workspace = true, features = ["util"] }
 tower-http.workspace = true
 
 [dev-dependencies]

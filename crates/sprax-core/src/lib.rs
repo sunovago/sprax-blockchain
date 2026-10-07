@@ -13,3 +13,7 @@ pub use genesis::{ConsensusParams, GenesisAccount, GenesisConfig, GenesisValidat
 pub use ledger::ChainLedger;
 pub use module::AppModule;
 pub use state::{AccountState, StateAccessor, StateTransitionContext};
+
+pub mod validator_set;
+
+pub mod validator_lifecycle;

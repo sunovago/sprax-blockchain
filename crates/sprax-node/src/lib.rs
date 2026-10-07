@@ -5,6 +5,7 @@ pub mod error;
 pub mod keyring;
 pub mod rpc_server;
 pub mod service;
+pub mod signing_journal;
 pub mod telemetry;
 
 pub use config::{ConsensusNodeConfig, NodeConfig, RpcConfig, TelemetryConfig};
@@ -15,3 +16,5 @@ pub use keyring::{KeyRecord, Keyring};
 pub use rpc_server::RpcServer;
 pub use service::{NodeMetrics, NodeService};
 pub use telemetry::init_telemetry;
+
+pub mod evidence_pool;

@@ -12,11 +12,14 @@ workspace = true
 
 [dependencies]
 sprax-types.workspace = true
+sprax-consensus.workspace = true
 sprax-crypto.workspace = true
 sprax-storage.workspace = true
+sprax-wasm.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+tempfile.workspace = true
