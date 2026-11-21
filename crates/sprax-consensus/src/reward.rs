@@ -313,9 +313,7 @@ impl RewardKeeper {
                 let commission_atto = mul_div_u128(val_share_atto, commission_bps, 10_000)
                     .unwrap_or(0);
 
-                let delegator_pool_atto = val_share_atto
-                    .checked_sub(commission_atto)
-                    .unwrap_or(0);
+                let delegator_pool_atto = val_share_atto.saturating_sub(commission_atto);
 
                 // Distribute among delegators
                 let total_shares_atto = val.delegator_shares.as_atto();
@@ -357,9 +355,7 @@ impl RewardKeeper {
                 }
 
                 // Any delegator rounding remainder goes to operator commission
-                let del_remainder_atto = delegator_pool_atto
-                    .checked_sub(sum_del_atto)
-                    .unwrap_or(0);
+                let del_remainder_atto = delegator_pool_atto.saturating_sub(sum_del_atto);
                 let total_val_comm_atto = commission_atto
                     .checked_add(del_remainder_atto)
                     .unwrap_or(commission_atto);

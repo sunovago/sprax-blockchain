@@ -55,10 +55,7 @@ fn is_tcp_available() -> bool {
     let Ok(addr) = listener.local_addr() else {
         return false;
     };
-    match std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)) {
-        Ok(_) => true,
-        Err(_) => false,
-    }
+    std::net::TcpStream::connect_timeout(&addr, std::time::Duration::from_millis(50)).is_ok()
 }
 
 #[tokio::test]

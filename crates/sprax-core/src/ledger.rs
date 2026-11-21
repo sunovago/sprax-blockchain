@@ -1021,6 +1021,7 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         self.store.get(&full_key).map_err(|e| CoreError::StateError(e.to_string()))
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn get_contract_storage_prefix(
         &self,
         address: Address,

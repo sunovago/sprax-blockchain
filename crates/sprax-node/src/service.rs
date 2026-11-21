@@ -533,6 +533,7 @@ impl NodeService {
             .map_err(|e| NodeError::RuntimeError(e.to_string()))
     }
 
+    #[allow(clippy::type_complexity)]
     pub fn get_contract_storage_prefix(
         &self,
         address: Address,
