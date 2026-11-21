@@ -502,10 +502,7 @@ impl NodeService {
             .map_err(|e| NodeError::RuntimeError(e.to_string()))
     }
 
-    pub fn get_contract_code(
-        &self,
-        address: Address,
-    ) -> Result<Option<Vec<u8>>, NodeError> {
+    pub fn get_contract_code(&self, address: Address) -> Result<Option<Vec<u8>>, NodeError> {
         self.ledger
             .read()
             .get_contract_code(address)
@@ -856,7 +853,9 @@ mod tests {
         let Ok(probe_addr) = probe_listener.local_addr() else {
             return;
         };
-        if std::net::TcpStream::connect_timeout(&probe_addr, std::time::Duration::from_millis(50)).is_err() {
+        if std::net::TcpStream::connect_timeout(&probe_addr, std::time::Duration::from_millis(50))
+            .is_err()
+        {
             eprintln!("Skipping port bind test: loopback TCP access not permitted in sandbox");
             return;
         }

@@ -64,12 +64,18 @@ impl ConsensusSnapshot {
 
         let mut prevotes_map = HashMap::new();
         for vote in &self.prevotes {
-            prevotes_map.insert((vote.height, vote.round, vote.validator_address), vote.clone());
+            prevotes_map.insert(
+                (vote.height, vote.round, vote.validator_address),
+                vote.clone(),
+            );
         }
 
         let mut precommits_map = HashMap::new();
         for vote in &self.precommits {
-            precommits_map.insert((vote.height, vote.round, vote.validator_address), vote.clone());
+            precommits_map.insert(
+                (vote.height, vote.round, vote.validator_address),
+                vote.clone(),
+            );
         }
 
         let mut proposed_map = HashMap::new();

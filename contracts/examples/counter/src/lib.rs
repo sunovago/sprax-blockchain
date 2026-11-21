@@ -208,13 +208,15 @@ pub fn execute(
                 amount,
                 denom: coin.denom,
             };
-            deps.storage.set(b"queried_balance", &to_json_binary(&resp)?);
+            deps.storage
+                .set(b"queried_balance", &to_json_binary(&resp)?);
             Ok(Response::new().add_attribute("action", "query_balance"))
         }
         ExecuteMsg::QueryOtherCount { contract } => {
             let query_msg = QueryMsg::Count {};
             let resp: CountResponse = deps.querier.query_wasm_smart(contract, &query_msg)?;
-            deps.storage.set(b"queried_other_count", &resp.count.to_be_bytes());
+            deps.storage
+                .set(b"queried_other_count", &resp.count.to_be_bytes());
             Ok(Response::new().add_attribute("action", "query_other_count"))
         }
         ExecuteMsg::QueryOtherRaw { contract, key } => {
@@ -238,7 +240,8 @@ pub fn execute(
             let resp = QueriedCodeHashResponse {
                 checksum: Binary::from(info.checksum.as_slice()),
             };
-            deps.storage.set(b"queried_code_hash", &to_json_binary(&resp)?);
+            deps.storage
+                .set(b"queried_code_hash", &to_json_binary(&resp)?);
             Ok(Response::new().add_attribute("action", "query_code_info"))
         }
     }
@@ -327,4 +330,3 @@ pub fn query(deps: Deps, _env: Env, msg: QueryMsg) -> StdResult<Binary> {
         }
     }
 }
-

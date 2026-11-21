@@ -42,7 +42,13 @@ fn test_wasm_bytecode_validation_and_security() {
     assert!(matches!(empty_err, ContractError::InvalidInput(_)));
 
     // 2. Valid bytecode is stored and receives deterministic CodeId
-    let code_id = vm.store_code(creator, vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00], 1).unwrap();
+    let code_id = vm
+        .store_code(
+            creator,
+            vec![0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00],
+            1,
+        )
+        .unwrap();
     assert_eq!(code_id, 1);
 
     // 3. CodeInfo is accurately retrieved
@@ -71,7 +77,15 @@ fn test_deterministic_contract_address_derivation() {
 
     let _ = vm1.store_code(creator, vec![0xbb; 32], 10).unwrap();
     let addr1 = vm1
-        .instantiate(creator, code_id, label.into(), None, Amount::ZERO, &mut env1, &mut gas1)
+        .instantiate(
+            creator,
+            code_id,
+            label.into(),
+            None,
+            Amount::ZERO,
+            &mut env1,
+            &mut gas1,
+        )
         .unwrap();
 
     let mut env2 = Env {
@@ -84,7 +98,15 @@ fn test_deterministic_contract_address_derivation() {
 
     let _ = vm2.store_code(creator, vec![0xbb; 32], 10).unwrap();
     let addr2 = vm2
-        .instantiate(creator, code_id, label.into(), None, Amount::ZERO, &mut env2, &mut gas2)
+        .instantiate(
+            creator,
+            code_id,
+            label.into(),
+            None,
+            Amount::ZERO,
+            &mut env2,
+            &mut gas2,
+        )
         .unwrap();
 
     // Two independent node VMs must derive the exact identical contract address
@@ -109,7 +131,15 @@ fn test_sprax20_token_full_lifecycle_and_gas_metering() {
 
     let code_id = vm.store_code(admin, vec![0xaa; 64], 1).unwrap();
     let _contract_addr = vm
-        .instantiate(admin, code_id, "SPRX-20 Gold".into(), Some(admin), Amount::ZERO, &mut env, &mut gas)
+        .instantiate(
+            admin,
+            code_id,
+            "SPRX-20 Gold".into(),
+            Some(admin),
+            Amount::ZERO,
+            &mut env,
+            &mut gas,
+        )
         .unwrap();
 
     let info = MessageInfo {
@@ -140,7 +170,8 @@ fn test_sprax20_token_full_lifecycle_and_gas_metering() {
     assert_eq!(init_resp.events[0].event_type, "cw20-instantiate");
 
     // 2. Query Alice's Balance
-    let alice_bal_bytes = TokenContract::query(&storage, &env, TokenQueryMsg::Balance { address: alice }).unwrap();
+    let alice_bal_bytes =
+        TokenContract::query(&storage, &env, TokenQueryMsg::Balance { address: alice }).unwrap();
     let alice_bal: Amount = serde_json::from_slice(&alice_bal_bytes).unwrap();
     assert_eq!(alice_bal, initial_amount);
 
@@ -166,7 +197,8 @@ fn test_sprax20_token_full_lifecycle_and_gas_metering() {
     assert_eq!(transfer_resp.events[0].event_type, "cw20-transfer");
 
     // 4. Verify balances after transfer
-    let bob_bal_bytes = TokenContract::query(&storage, &env, TokenQueryMsg::Balance { address: bob }).unwrap();
+    let bob_bal_bytes =
+        TokenContract::query(&storage, &env, TokenQueryMsg::Balance { address: bob }).unwrap();
     let bob_bal: Amount = serde_json::from_slice(&bob_bal_bytes).unwrap();
     assert_eq!(bob_bal, transfer_amount);
 
@@ -174,10 +206,14 @@ fn test_sprax20_token_full_lifecycle_and_gas_metering() {
         &TokenContract::query(&storage, &env, TokenQueryMsg::Balance { address: alice }).unwrap(),
     )
     .unwrap();
-    assert_eq!(alice_bal_after, initial_amount.checked_sub(transfer_amount).unwrap());
+    assert_eq!(
+        alice_bal_after,
+        initial_amount.checked_sub(transfer_amount).unwrap()
+    );
 
     // 5. Query TokenInfo
-    let token_info_bytes = TokenContract::query(&storage, &env, TokenQueryMsg::TokenInfo {}).unwrap();
+    let token_info_bytes =
+        TokenContract::query(&storage, &env, TokenQueryMsg::TokenInfo {}).unwrap();
     let token_info: TokenInfo = serde_json::from_slice(&token_info_bytes).unwrap();
     assert_eq!(token_info.symbol, "GLD");
     assert_eq!(token_info.decimals, 18);
@@ -205,7 +241,15 @@ fn test_escrow_contract_multi_party_workflow() {
 
     let code_id = vm.store_code(depositor, vec![0xee; 64], 5).unwrap();
     let _contract_addr = vm
-        .instantiate(depositor, code_id, "SPRX Escrow".into(), None, Amount::ZERO, &mut env, &mut gas)
+        .instantiate(
+            depositor,
+            code_id,
+            "SPRX Escrow".into(),
+            None,
+            Amount::ZERO,
+            &mut env,
+            &mut gas,
+        )
         .unwrap();
 
     let deposit_amount = Amount::from_atto(50_000_000_000_000_000);
@@ -241,7 +285,14 @@ fn test_escrow_contract_multi_party_workflow() {
         sender: third_party,
         funds: Amount::ZERO,
     };
-    let unauth_err = EscrowContract::execute(&mut storage, &env, &bad_info, &mut gas, EscrowExecuteMsg::Release {}).unwrap_err();
+    let unauth_err = EscrowContract::execute(
+        &mut storage,
+        &env,
+        &bad_info,
+        &mut gas,
+        EscrowExecuteMsg::Release {},
+    )
+    .unwrap_err();
     assert!(matches!(unauth_err, ContractError::Unauthorized(_)));
 
     // 4. Arbiter approves and releases
@@ -249,7 +300,14 @@ fn test_escrow_contract_multi_party_workflow() {
         sender: arbiter,
         funds: Amount::ZERO,
     };
-    let release_resp = EscrowContract::execute(&mut storage, &env, &arbiter_info, &mut gas, EscrowExecuteMsg::Release {}).unwrap();
+    let release_resp = EscrowContract::execute(
+        &mut storage,
+        &env,
+        &arbiter_info,
+        &mut gas,
+        EscrowExecuteMsg::Release {},
+    )
+    .unwrap();
     assert_eq!(release_resp.events[0].event_type, "escrow-release");
 
     // 5. Escrow status is now Released
@@ -268,7 +326,10 @@ fn test_contract_security_reentrancy_and_gas_exhaustion() {
     // 1. Reentrancy Lock Test
     vm.enter_call(&target).unwrap();
     let reentrancy_err = vm.enter_call(&target).unwrap_err();
-    assert!(matches!(reentrancy_err, ContractError::ReentrancyDetected(_)));
+    assert!(matches!(
+        reentrancy_err,
+        ContractError::ReentrancyDetected(_)
+    ));
     vm.exit_call(&target);
     // After exiting call, entering again succeeds
     assert!(vm.enter_call(&target).is_ok());
@@ -285,15 +346,17 @@ fn test_contract_security_reentrancy_and_gas_exhaustion() {
     let creator = Address::new([1u8; 20]);
     let code_id = vm.store_code(creator, vec![0x11; 32], 1).unwrap();
 
-    let out_of_gas_err = vm.instantiate(
-        creator,
-        code_id,
-        "Tiny Gas Contract".into(),
-        None,
-        Amount::ZERO,
-        &mut env,
-        &mut tiny_gas,
-    ).unwrap_err();
+    let out_of_gas_err = vm
+        .instantiate(
+            creator,
+            code_id,
+            "Tiny Gas Contract".into(),
+            None,
+            Amount::ZERO,
+            &mut env,
+            &mut tiny_gas,
+        )
+        .unwrap_err();
     assert!(matches!(out_of_gas_err, ContractError::OutOfGas { .. }));
 }
 
@@ -307,16 +370,21 @@ async fn test_smart_contract_rpc_and_rest_endpoints() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "method": "sprx_estimateContractGas",
-            "params": [alice_addr_str, {"balance": {}}],
-            "id": 1
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "sprx_estimateContractGas",
+                "params": [alice_addr_str, {"balance": {}}],
+                "id": 1
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(gas_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert!(body["result"]["gas_estimated"].as_u64().unwrap() > 0);
 
@@ -325,15 +393,20 @@ async fn test_smart_contract_rpc_and_rest_endpoints() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "method": "sprx_getContract",
-            "params": [alice_addr_str],
-            "id": 2
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "method": "sprx_getContract",
+                "params": [alice_addr_str],
+                "id": 2
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(get_req).await.unwrap();
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let body: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert!(body["result"].is_null());
 
@@ -345,7 +418,9 @@ async fn test_smart_contract_rpc_and_rest_endpoints() {
         .unwrap();
     let resp = router.clone().oneshot(list_req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024).await.unwrap();
+    let body_bytes = axum::body::to_bytes(resp.into_body(), 1024 * 1024)
+        .await
+        .unwrap();
     let list_body: Value = serde_json::from_slice(&body_bytes).unwrap();
     assert!(list_body["contracts"].is_array());
 
@@ -381,7 +456,17 @@ fn test_cross_node_execution_determinism() {
         contract_address: Address::ZERO,
     };
     let mut gas1 = GasMeter::new(500_000);
-    let addr1 = vm_node1.instantiate(creator, code_id1, "Token".into(), Some(creator), Amount::ZERO, &mut env1, &mut gas1).unwrap();
+    let addr1 = vm_node1
+        .instantiate(
+            creator,
+            code_id1,
+            "Token".into(),
+            Some(creator),
+            Amount::ZERO,
+            &mut env1,
+            &mut gas1,
+        )
+        .unwrap();
 
     // Instantiate token on Node 2
     let mut env2 = Env {
@@ -391,28 +476,105 @@ fn test_cross_node_execution_determinism() {
         contract_address: Address::ZERO,
     };
     let mut gas2 = GasMeter::new(500_000);
-    let addr2 = vm_node2.instantiate(creator, code_id2, "Token".into(), Some(creator), Amount::ZERO, &mut env2, &mut gas2).unwrap();
+    let addr2 = vm_node2
+        .instantiate(
+            creator,
+            code_id2,
+            "Token".into(),
+            Some(creator),
+            Amount::ZERO,
+            &mut env2,
+            &mut gas2,
+        )
+        .unwrap();
 
     assert_eq!(addr1, addr2);
     assert_eq!(gas1.consumed(), gas2.consumed());
 
     // Execute transfer on Node 1
     let mut storage1 = vm_node1.storage().write();
-    let info = MessageInfo { sender: creator, funds: Amount::ZERO };
-    TokenContract::instantiate(&mut storage1, &env1, &info, &mut gas1, "T".into(), "T".into(), 6, vec![InitialBalance { address: creator, amount: Amount::from_atto(1_000) }], Some(creator)).unwrap();
-    TokenContract::execute(&mut storage1, &env1, &info, &mut gas1, TokenExecuteMsg::Transfer { recipient, amount: Amount::from_atto(300) }).unwrap();
+    let info = MessageInfo {
+        sender: creator,
+        funds: Amount::ZERO,
+    };
+    TokenContract::instantiate(
+        &mut storage1,
+        &env1,
+        &info,
+        &mut gas1,
+        "T".into(),
+        "T".into(),
+        6,
+        vec![InitialBalance {
+            address: creator,
+            amount: Amount::from_atto(1_000),
+        }],
+        Some(creator),
+    )
+    .unwrap();
+    TokenContract::execute(
+        &mut storage1,
+        &env1,
+        &info,
+        &mut gas1,
+        TokenExecuteMsg::Transfer {
+            recipient,
+            amount: Amount::from_atto(300),
+        },
+    )
+    .unwrap();
 
     // Execute transfer on Node 2
     let mut storage2 = vm_node2.storage().write();
-    TokenContract::instantiate(&mut storage2, &env2, &info, &mut gas2, "T".into(), "T".into(), 6, vec![InitialBalance { address: creator, amount: Amount::from_atto(1_000) }], Some(creator)).unwrap();
-    TokenContract::execute(&mut storage2, &env2, &info, &mut gas2, TokenExecuteMsg::Transfer { recipient, amount: Amount::from_atto(300) }).unwrap();
+    TokenContract::instantiate(
+        &mut storage2,
+        &env2,
+        &info,
+        &mut gas2,
+        "T".into(),
+        "T".into(),
+        6,
+        vec![InitialBalance {
+            address: creator,
+            amount: Amount::from_atto(1_000),
+        }],
+        Some(creator),
+    )
+    .unwrap();
+    TokenContract::execute(
+        &mut storage2,
+        &env2,
+        &info,
+        &mut gas2,
+        TokenExecuteMsg::Transfer {
+            recipient,
+            amount: Amount::from_atto(300),
+        },
+    )
+    .unwrap();
 
     // Assert gas consumed is bit-for-bit identical across independent nodes
     assert_eq!(gas1.consumed(), gas2.consumed());
 
     // Assert resulting balances are bit-for-bit identical
-    let b1: Amount = serde_json::from_slice(&TokenContract::query(&storage1, &env1, TokenQueryMsg::Balance { address: recipient }).unwrap()).unwrap();
-    let b2: Amount = serde_json::from_slice(&TokenContract::query(&storage2, &env2, TokenQueryMsg::Balance { address: recipient }).unwrap()).unwrap();
+    let b1: Amount = serde_json::from_slice(
+        &TokenContract::query(
+            &storage1,
+            &env1,
+            TokenQueryMsg::Balance { address: recipient },
+        )
+        .unwrap(),
+    )
+    .unwrap();
+    let b2: Amount = serde_json::from_slice(
+        &TokenContract::query(
+            &storage2,
+            &env2,
+            TokenQueryMsg::Balance { address: recipient },
+        )
+        .unwrap(),
+    )
+    .unwrap();
     assert_eq!(b1, b2);
     assert_eq!(b1, Amount::from_atto(300));
 }

@@ -5,12 +5,17 @@ use sprax_network::{
     swarm::SwarmHub,
 };
 use sprax_types::{
-    Address, Amount, Block, BlockBody, BlockHeader, ChainId, Hash32, KeyType,
-    Transaction, TxBody, TxFee, TxMessage,
+    Address, Amount, Block, BlockBody, BlockHeader, ChainId, Hash32, KeyType, Transaction, TxBody,
+    TxFee, TxMessage,
 };
 use std::time::Duration;
 
-fn create_test_tx(sender_kp: &Ed25519Keypair, to: Address, amount: u128, nonce: u64) -> Transaction {
+fn create_test_tx(
+    sender_kp: &Ed25519Keypair,
+    to: Address,
+    amount: u128,
+    nonce: u64,
+) -> Transaction {
     let body = TxBody {
         chain_id: ChainId::new("sprax-devnet-1").unwrap(),
         sender: sender_kp.address(),
@@ -25,7 +30,13 @@ fn create_test_tx(sender_kp: &Ed25519Keypair, to: Address, amount: u128, nonce: 
     };
     let sign_bytes = body.sign_bytes().unwrap();
     let sig = sender_kp.sign(&sign_bytes);
-    Transaction::new(body, KeyType::Ed25519, sender_kp.public_key_bytes().to_vec(), sig).unwrap()
+    Transaction::new(
+        body,
+        KeyType::Ed25519,
+        sender_kp.public_key_bytes().to_vec(),
+        sig,
+    )
+    .unwrap()
 }
 
 fn create_test_block(height: u64, parent: Hash32, proposer: Address) -> Block {
@@ -56,9 +67,17 @@ async fn test_1_node_local_network_standalone() {
     let ident = NetworkIdentity::generate().unwrap();
     assert_eq!(ident.peer_id().as_str().len(), 40);
 
-    let tx = create_test_tx(&Ed25519Keypair::from_seed(&[1u8; 32]), Address::new([2u8; 20]), 10, 0);
+    let tx = create_test_tx(
+        &Ed25519Keypair::from_seed(&[1u8; 32]),
+        Address::new([2u8; 20]),
+        10,
+        0,
+    );
     // Broadcasting from solo node delivers to 0 other nodes
-    let delivered = hub.broadcast(&p1, NetworkMessage::TxGossip(tx)).await.unwrap();
+    let delivered = hub
+        .broadcast(&p1, NetworkMessage::TxGossip(tx))
+        .await
+        .unwrap();
     assert_eq!(delivered, 0);
 
     assert_eq!(hub.active_peers().len(), 1);
@@ -79,15 +98,24 @@ async fn test_2_node_network_transaction_and_block_propagation() {
     let tx_hash = sprax_crypto::Hasher::tx_hash(&tx).unwrap();
 
     // Node 1 broadcasts tx
-    let delivered = hub.broadcast(&p1, NetworkMessage::TxGossip(tx)).await.unwrap();
+    let delivered = hub
+        .broadcast(&p1, NetworkMessage::TxGossip(tx))
+        .await
+        .unwrap();
     assert_eq!(delivered, 1);
 
     // Node 2 receives tx
-    let received_tx = tokio::time::timeout(Duration::from_secs(1), ep2.inbound_tx_rx.lock().await.recv())
-        .await
-        .unwrap()
-        .expect("node 2 must receive tx");
-    assert_eq!(sprax_crypto::Hasher::tx_hash(&received_tx).unwrap(), tx_hash);
+    let received_tx = tokio::time::timeout(
+        Duration::from_secs(1),
+        ep2.inbound_tx_rx.lock().await.recv(),
+    )
+    .await
+    .unwrap()
+    .expect("node 2 must receive tx");
+    assert_eq!(
+        sprax_crypto::Hasher::tx_hash(&received_tx).unwrap(),
+        tx_hash
+    );
 
     // Verify signature
     let sign_bytes = received_tx.sign_bytes().unwrap();
@@ -95,16 +123,22 @@ async fn test_2_node_network_transaction_and_block_propagation() {
         &received_tx.public_key,
         &sign_bytes,
         &received_tx.signature
-    ).is_ok());
+    )
+    .is_ok());
 
     // Node 1 broadcasts block
     let block = create_test_block(1, Hash32::ZERO, kp.address());
-    hub.broadcast(&p1, NetworkMessage::BlockGossip(block.clone())).await.unwrap();
-
-    let received_block = tokio::time::timeout(Duration::from_secs(1), ep2.inbound_block_rx.lock().await.recv())
+    hub.broadcast(&p1, NetworkMessage::BlockGossip(block.clone()))
         .await
-        .unwrap()
-        .expect("node 2 must receive block");
+        .unwrap();
+
+    let received_block = tokio::time::timeout(
+        Duration::from_secs(1),
+        ep2.inbound_block_rx.lock().await.recv(),
+    )
+    .await
+    .unwrap()
+    .expect("node 2 must receive block");
     assert_eq!(received_block.header.height, 1);
 }
 
@@ -149,14 +183,19 @@ async fn test_4_node_network_consensus_proposal_and_voting_mesh() {
     let sign_bytes = proposal.sign_bytes().unwrap();
     proposal.signature = keypairs[0].sign(&sign_bytes);
 
-    hub.broadcast(&peers[0], NetworkMessage::Proposal(proposal.clone())).await.unwrap();
+    hub.broadcast(&peers[0], NetworkMessage::Proposal(proposal.clone()))
+        .await
+        .unwrap();
 
     // Nodes 1, 2, 3 receive proposal and emit Prevote
     for i in 1..4 {
-        let rx_prop = tokio::time::timeout(Duration::from_secs(1), endpoints[i].inbound_proposal_rx.lock().await.recv())
-            .await
-            .unwrap()
-            .expect("must receive proposal");
+        let rx_prop = tokio::time::timeout(
+            Duration::from_secs(1),
+            endpoints[i].inbound_proposal_rx.lock().await.recv(),
+        )
+        .await
+        .unwrap()
+        .expect("must receive proposal");
         assert_eq!(rx_prop.block.header.height, 1);
         assert_eq!(rx_prop.round, 0);
 
@@ -173,20 +212,30 @@ async fn test_4_node_network_consensus_proposal_and_voting_mesh() {
         let sign_bytes = pv.sign_bytes().unwrap();
         pv.signature = keypairs[i].sign(&sign_bytes);
 
-        hub.broadcast(&peers[i], NetworkMessage::Vote(pv)).await.unwrap();
+        hub.broadcast(&peers[i], NetworkMessage::Vote(pv))
+            .await
+            .unwrap();
     }
 
     // Node 0 receives all 3 prevotes (75% power > 67 quorum)
     let mut prevote_count = 0;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(2);
     while prevote_count < 3 && tokio::time::Instant::now() < deadline {
-        if let Ok(Some(vote)) = tokio::time::timeout(Duration::from_millis(100), endpoints[0].inbound_vote_rx.lock().await.recv()).await {
+        if let Ok(Some(vote)) = tokio::time::timeout(
+            Duration::from_millis(100),
+            endpoints[0].inbound_vote_rx.lock().await.recv(),
+        )
+        .await
+        {
             assert_eq!(vote.vote_type, VoteType::Prevote);
             assert_eq!(vote.block_hash, Some(proposal_hash));
             prevote_count += 1;
         }
     }
-    assert_eq!(prevote_count, 3, "Proposer must receive +2/3 prevotes from peers");
+    assert_eq!(
+        prevote_count, 3,
+        "Proposer must receive +2/3 prevotes from peers"
+    );
 }
 
 #[tokio::test]
@@ -207,16 +256,25 @@ async fn test_7_node_network_gossip_flood_and_deduplication() {
     let expected_hash = sprax_crypto::Hasher::tx_hash(&tx).unwrap();
 
     // Flood network from Node 0: broadcasts to 6 other peers
-    let delivered = hub.broadcast(&peers[0], NetworkMessage::TxGossip(tx.clone())).await.unwrap();
+    let delivered = hub
+        .broadcast(&peers[0], NetworkMessage::TxGossip(tx.clone()))
+        .await
+        .unwrap();
     assert_eq!(delivered, 6);
 
     // Every peer from 1 to 6 receives the transaction
     for i in 1..7 {
-        let rx_tx = tokio::time::timeout(Duration::from_secs(1), endpoints[i].inbound_tx_rx.lock().await.recv())
-            .await
-            .unwrap()
-            .expect("peer must receive tx");
-        assert_eq!(sprax_crypto::Hasher::tx_hash(&rx_tx).unwrap(), expected_hash);
+        let rx_tx = tokio::time::timeout(
+            Duration::from_secs(1),
+            endpoints[i].inbound_tx_rx.lock().await.recv(),
+        )
+        .await
+        .unwrap()
+        .expect("peer must receive tx");
+        assert_eq!(
+            sprax_crypto::Hasher::tx_hash(&rx_tx).unwrap(),
+            expected_hash
+        );
     }
 }
 
@@ -239,18 +297,28 @@ async fn test_10_node_network_heterogeneous_topology_throughput() {
     // Node 0 broadcasts 20 transactions in rapid sequence
     for nonce in 0..tx_count {
         let tx = create_test_tx(&kp, Address::new([0xAA; 20]), 1, nonce);
-        hub.broadcast(&peers[0], NetworkMessage::TxGossip(tx)).await.unwrap();
+        hub.broadcast(&peers[0], NetworkMessage::TxGossip(tx))
+            .await
+            .unwrap();
     }
 
     // Node 9 receives all 20 transactions
     let mut received = 0;
     let deadline = tokio::time::Instant::now() + Duration::from_secs(3);
     while received < tx_count && tokio::time::Instant::now() < deadline {
-        if let Ok(Some(_)) = tokio::time::timeout(Duration::from_millis(100), endpoints[9].inbound_tx_rx.lock().await.recv()).await {
+        if let Ok(Some(_)) = tokio::time::timeout(
+            Duration::from_millis(100),
+            endpoints[9].inbound_tx_rx.lock().await.recv(),
+        )
+        .await
+        {
             received += 1;
         }
     }
-    assert_eq!(received, tx_count, "Node 9 must receive all 20 gossip transactions");
+    assert_eq!(
+        received, tx_count,
+        "Node 9 must receive all 20 gossip transactions"
+    );
 }
 
 #[tokio::test]
@@ -267,7 +335,10 @@ async fn test_fault_peer_disconnect_and_reconnection_sync() {
 
     // Node 1 broadcasts block while Node 2 is offline
     let block1 = create_test_block(1, Hash32::ZERO, Address::new([1u8; 20]));
-    let delivered = hub.broadcast(&p1, NetworkMessage::BlockGossip(block1)).await.unwrap();
+    let delivered = hub
+        .broadcast(&p1, NetworkMessage::BlockGossip(block1))
+        .await
+        .unwrap();
     assert_eq!(delivered, 0, "No active peers to deliver block");
 
     // Node 2 re-registers (reconnects)
@@ -275,12 +346,17 @@ async fn test_fault_peer_disconnect_and_reconnection_sync() {
 
     // Node 1 broadcasts next block
     let block2 = create_test_block(2, Hash32::new([1u8; 32]), Address::new([1u8; 20]));
-    hub.broadcast(&p1, NetworkMessage::BlockGossip(block2)).await.unwrap();
-
-    let rx = tokio::time::timeout(Duration::from_secs(1), ep2_reconnected.inbound_block_rx.lock().await.recv())
+    hub.broadcast(&p1, NetworkMessage::BlockGossip(block2))
         .await
-        .unwrap()
-        .expect("must receive block after reconnection");
+        .unwrap();
+
+    let rx = tokio::time::timeout(
+        Duration::from_secs(1),
+        ep2_reconnected.inbound_block_rx.lock().await.recv(),
+    )
+    .await
+    .unwrap()
+    .expect("must receive block after reconnection");
     assert_eq!(rx.header.height, 2);
 }
 
@@ -300,14 +376,24 @@ async fn test_fault_delayed_messages_and_asymmetric_partitions() {
 
     // Node 1 broadcasts block -> should only reach Node 3
     let block = create_test_block(1, Hash32::ZERO, Address::new([1u8; 20]));
-    hub.broadcast(&p1, NetworkMessage::BlockGossip(block)).await.unwrap();
+    hub.broadcast(&p1, NetworkMessage::BlockGossip(block))
+        .await
+        .unwrap();
 
     // Node 3 receives
-    let rx3 = tokio::time::timeout(Duration::from_millis(500), ep3.inbound_block_rx.lock().await.recv()).await;
+    let rx3 = tokio::time::timeout(
+        Duration::from_millis(500),
+        ep3.inbound_block_rx.lock().await.recv(),
+    )
+    .await;
     assert!(rx3.is_ok(), "Node 3 should receive block");
 
     // Node 2 is partitioned -> receives nothing
-    let rx2 = tokio::time::timeout(Duration::from_millis(200), ep2.inbound_block_rx.lock().await.recv()).await;
+    let rx2 = tokio::time::timeout(
+        Duration::from_millis(200),
+        ep2.inbound_block_rx.lock().await.recv(),
+    )
+    .await;
     assert!(rx2.is_err(), "Partitioned Node 2 must not receive message");
 
     // Heal partition
@@ -315,9 +401,15 @@ async fn test_fault_delayed_messages_and_asymmetric_partitions() {
 
     // Broadcast again -> Node 2 now receives
     let block2 = create_test_block(2, Hash32::ZERO, Address::new([1u8; 20]));
-    hub.broadcast(&p1, NetworkMessage::BlockGossip(block2)).await.unwrap();
+    hub.broadcast(&p1, NetworkMessage::BlockGossip(block2))
+        .await
+        .unwrap();
 
-    let rx2_healed = tokio::time::timeout(Duration::from_millis(500), ep2.inbound_block_rx.lock().await.recv()).await;
+    let rx2_healed = tokio::time::timeout(
+        Duration::from_millis(500),
+        ep2.inbound_block_rx.lock().await.recv(),
+    )
+    .await;
     assert!(rx2_healed.is_ok(), "Healed Node 2 must receive message");
 }
 
@@ -330,8 +422,12 @@ async fn test_security_malformed_and_tampered_payload_rejection() {
     tx.body.memo = "tampered payload".into();
 
     let sign_bytes = tx.sign_bytes().unwrap();
-    let verify_res = sprax_crypto::Ed25519Keypair::verify(&tx.public_key, &sign_bytes, &tx.signature);
-    assert!(verify_res.is_err(), "Tampered transaction signature must fail verification");
+    let verify_res =
+        sprax_crypto::Ed25519Keypair::verify(&tx.public_key, &sign_bytes, &tx.signature);
+    assert!(
+        verify_res.is_err(),
+        "Tampered transaction signature must fail verification"
+    );
 }
 
 #[tokio::test]
@@ -346,5 +442,8 @@ async fn test_security_rate_limiting_and_peer_reputation_decay() {
     for _ in 0..5 {
         score.record_invalid_message();
     }
-    assert!(score.is_banned, "Repeated invalid messages must trigger peer ban");
+    assert!(
+        score.is_banned,
+        "Repeated invalid messages must trigger peer ban"
+    );
 }

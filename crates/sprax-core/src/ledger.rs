@@ -1004,10 +1004,15 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         self.get_contract_code_by_hash(info.code_id)
     }
 
-    pub fn get_contract_code_by_hash(&self, code_hash: Hash32) -> Result<Option<Vec<u8>>, CoreError> {
+    pub fn get_contract_code_by_hash(
+        &self,
+        code_hash: Hash32,
+    ) -> Result<Option<Vec<u8>>, CoreError> {
         let mut key = b"wasm/code/".to_vec();
         key.extend_from_slice(code_hash.as_bytes());
-        self.store.get(&key).map_err(|e| CoreError::StateError(e.to_string()))
+        self.store
+            .get(&key)
+            .map_err(|e| CoreError::StateError(e.to_string()))
     }
 
     pub fn get_contract_storage(
@@ -1018,7 +1023,9 @@ impl<S: KVStore + StateCommitment + ChainMetaStore + Clone + 'static> ChainLedge
         let mut full_key = b"wasm/state/".to_vec();
         full_key.extend_from_slice(address.as_bytes());
         full_key.extend_from_slice(key);
-        self.store.get(&full_key).map_err(|e| CoreError::StateError(e.to_string()))
+        self.store
+            .get(&full_key)
+            .map_err(|e| CoreError::StateError(e.to_string()))
     }
 
     #[allow(clippy::type_complexity)]

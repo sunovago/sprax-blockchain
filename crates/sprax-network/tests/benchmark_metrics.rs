@@ -1,8 +1,6 @@
 use sprax_crypto::Ed25519Keypair;
 use sprax_network::{
-    message::NetworkMessage,
-    transport::AuthenticatedChannel,
-    NetworkIdentity, SwarmHub,
+    message::NetworkMessage, transport::AuthenticatedChannel, NetworkIdentity, SwarmHub,
 };
 use sprax_types::{Amount, ChainId, Hash32, KeyType, Transaction, TxBody, TxFee, TxMessage};
 use std::{sync::Arc, time::Instant};
@@ -54,7 +52,11 @@ async fn benchmark_network_performance_metrics() {
     let de_duration = start_de.elapsed();
     let avg_de_us = (de_duration.as_micros() as f64) / (iters as f64);
 
-    println!("Framed Message size: {} bytes (Payload: {} bytes)", serialized_bytes.len(), raw_payload.len());
+    println!(
+        "Framed Message size: {} bytes (Payload: {} bytes)",
+        serialized_bytes.len(),
+        raw_payload.len()
+    );
     println!("Avg Serialization Latency: {:.3} µs", avg_ser_us);
     println!("Avg Deserialization Latency: {:.3} µs", avg_de_us);
 
@@ -71,25 +73,15 @@ async fn benchmark_network_performance_metrics() {
         let id_b_c = Arc::clone(&id_b);
 
         let t_a = tokio::spawn(async move {
-            AuthenticatedChannel::initiate(
-                &mut stream_a,
-                &id_a_c,
-                "sprax-devnet-1",
-                &genesis_hash,
-            )
-            .await
-            .unwrap()
+            AuthenticatedChannel::initiate(&mut stream_a, &id_a_c, "sprax-devnet-1", &genesis_hash)
+                .await
+                .unwrap()
         });
 
         let t_b = tokio::spawn(async move {
-            AuthenticatedChannel::respond(
-                &mut stream_b,
-                &id_b_c,
-                "sprax-devnet-1",
-                &genesis_hash,
-            )
-            .await
-            .unwrap()
+            AuthenticatedChannel::respond(&mut stream_b, &id_b_c, "sprax-devnet-1", &genesis_hash)
+                .await
+                .unwrap()
         });
 
         let (res_a, res_b) = tokio::join!(t_a, t_b);
@@ -98,7 +90,10 @@ async fn benchmark_network_performance_metrics() {
     }
     let handshake_duration = start_handshake.elapsed();
     let avg_handshake_ms = (handshake_duration.as_secs_f64() * 1000.0) / (handshake_iters as f64);
-    println!("Avg Mutual Noise Handshake Latency: {:.3} ms", avg_handshake_ms);
+    println!(
+        "Avg Mutual Noise Handshake Latency: {:.3} ms",
+        avg_handshake_ms
+    );
 
     // 3. GossipSub Propagation Throughput in SwarmHub (10 nodes)
     let hub = Arc::new(SwarmHub::new());
@@ -122,11 +117,18 @@ async fn benchmark_network_performance_metrics() {
     let flood_duration = start_flood.elapsed();
     let total_deliveries = tx_count * (num_nodes - 1);
     let throughput = (total_deliveries as f64) / flood_duration.as_secs_f64();
-    println!("Gossip Flood (10 nodes mesh): {} total deliveries in {:.3} s", total_deliveries, flood_duration.as_secs_f64());
+    println!(
+        "Gossip Flood (10 nodes mesh): {} total deliveries in {:.3} s",
+        total_deliveries,
+        flood_duration.as_secs_f64()
+    );
     println!("Gossip Throughput: {:.1} msgs/sec", throughput);
 
     // 4. Memory footprint per peer connection estimate
     let per_peer_channel_buffers = (128 * 1024) + (64 * 1024); // RX/TX framing buffers + queues
-    println!("Estimated memory footprint per active peer session: ~{} KB", per_peer_channel_buffers / 1024);
+    println!(
+        "Estimated memory footprint per active peer session: ~{} KB",
+        per_peer_channel_buffers / 1024
+    );
     println!("=== BENCHMARK COMPLETE ===\n");
 }

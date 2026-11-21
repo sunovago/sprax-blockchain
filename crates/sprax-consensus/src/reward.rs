@@ -20,7 +20,7 @@ impl Default for RewardParams {
         Self {
             base_block_reward: Amount::from_sprx_whole(2).expect("valid 2 SPRX"),
             proposer_bonus_bps: 1_000, // 10.00%
-            community_tax_bps: 200,   // 2.00%
+            community_tax_bps: 200,    // 2.00%
         }
     }
 }
@@ -232,17 +232,13 @@ impl RewardKeeper {
         // 1. Community tax
         let community_tax_atto = pot_atto
             .checked_mul(self.params.community_tax_bps as u128)
-            .ok_or_else(|| {
-                ConsensusError::InvalidValidatorSet("community tax overflow".into())
-            })?
+            .ok_or_else(|| ConsensusError::InvalidValidatorSet("community tax overflow".into()))?
             / 10_000;
 
         // 2. Proposer bonus
         let proposer_bonus_atto = pot_atto
             .checked_mul(self.params.proposer_bonus_bps as u128)
-            .ok_or_else(|| {
-                ConsensusError::InvalidValidatorSet("proposer bonus overflow".into())
-            })?
+            .ok_or_else(|| ConsensusError::InvalidValidatorSet("proposer bonus overflow".into()))?
             / 10_000;
 
         // 3. Pool for committers
@@ -310,8 +306,8 @@ impl RewardKeeper {
 
                 // Validator commission
                 let commission_bps = val.commission.rate_bps as u128;
-                let commission_atto = mul_div_u128(val_share_atto, commission_bps, 10_000)
-                    .unwrap_or(0);
+                let commission_atto =
+                    mul_div_u128(val_share_atto, commission_bps, 10_000).unwrap_or(0);
 
                 let delegator_pool_atto = val_share_atto.saturating_sub(commission_atto);
 
@@ -341,11 +337,10 @@ impl RewardKeeper {
                                     .delegator_rewards
                                     .entry((del_addr, *val_addr))
                                     .or_insert(Amount::ZERO);
-                                *entry = entry
-                                    .checked_add(Amount::from_atto(reward_atto))
-                                    .map_err(|e| {
-                                        ConsensusError::InvalidValidatorSet(e.to_string())
-                                    })?;
+                                *entry =
+                                    entry.checked_add(Amount::from_atto(reward_atto)).map_err(
+                                        |e| ConsensusError::InvalidValidatorSet(e.to_string()),
+                                    )?;
 
                                 round_del_rewards
                                     .insert((del_addr, *val_addr), Amount::from_atto(reward_atto));
@@ -368,8 +363,7 @@ impl RewardKeeper {
                     .checked_add(Amount::from_atto(total_val_comm_atto))
                     .map_err(|e| ConsensusError::InvalidValidatorSet(e.to_string()))?;
 
-                round_val_commissions
-                    .insert(*val_addr, Amount::from_atto(total_val_comm_atto));
+                round_val_commissions.insert(*val_addr, Amount::from_atto(total_val_comm_atto));
             }
         }
 
@@ -504,7 +498,7 @@ mod tests {
 
         let mut reward_keeper = RewardKeeper::new(RewardParams::default());
         let tx_fees = Amount::from_sprx_whole(1).unwrap(); // 1 SPRX in tx fees
-        // Total pot = 2 (base) + 1 (fees) = 3 SPRX
+                                                           // Total pot = 2 (base) + 1 (fees) = 3 SPRX
 
         let distribution = reward_keeper
             .distribute_block_rewards(1, val1, tx_fees, &[val1, val2], &staking)
@@ -539,9 +533,6 @@ mod tests {
         // Claim commission
         let claimed_comm = reward_keeper.claim_operator_commission(&val1).unwrap();
         assert_eq!(claimed_comm, comm_val1);
-        assert_eq!(
-            reward_keeper.get_operator_commission(&val1),
-            Amount::ZERO
-        );
+        assert_eq!(reward_keeper.get_operator_commission(&val1), Amount::ZERO);
     }
 }

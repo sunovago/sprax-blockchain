@@ -102,7 +102,9 @@ pub fn execute(
                 return Err(StdError::msg("escrow is already settled"));
             }
             if info.sender.as_str() != state.sender {
-                return Err(StdError::msg("only original sender can deposit into escrow"));
+                return Err(StdError::msg(
+                    "only original sender can deposit into escrow",
+                ));
             }
             if amount == 0 {
                 return Err(StdError::msg("deposit amount must be greater than zero"));
@@ -256,7 +258,9 @@ mod tests {
         let refund_msg = ExecuteMsg::Refund {};
         let info = message_info(&sender, &[]);
         let err = execute(deps.as_mut(), env.clone(), info, refund_msg.clone()).unwrap_err();
-        assert!(err.to_string().contains("cannot refund before timeout height"));
+        assert!(err
+            .to_string()
+            .contains("cannot refund before timeout height"));
 
         // Advance block height past timeout (height 550 >= 500)
         env.block.height = 550;

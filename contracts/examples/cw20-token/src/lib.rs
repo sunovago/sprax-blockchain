@@ -387,8 +387,14 @@ mod tests {
         execute(deps.as_mut(), env.clone(), info, transfer_from_msg).unwrap();
 
         assert_eq!(read_balance(deps.as_ref(), bob.as_str()).unwrap(), 310_000);
-        assert_eq!(read_balance(deps.as_ref(), alice.as_str()).unwrap(), 690_000);
-        assert_eq!(read_allowance(deps.as_ref(), alice.as_str(), bob.as_str()).unwrap(), 40_000);
+        assert_eq!(
+            read_balance(deps.as_ref(), alice.as_str()).unwrap(),
+            690_000
+        );
+        assert_eq!(
+            read_allowance(deps.as_ref(), alice.as_str(), bob.as_str()).unwrap(),
+            40_000
+        );
 
         // 4. Mint by minter
         let mint_msg = ExecuteMsg::Mint {

@@ -1,4 +1,7 @@
-use axum::{body::Body, http::{Request, StatusCode}};
+use axum::{
+    body::Body,
+    http::{Request, StatusCode},
+};
 use serde_json::{json, Value};
 use sprax_crypto::Ed25519Keypair;
 use sprax_node::{NodeService, RpcServer};
@@ -32,15 +35,20 @@ async fn test_json_rpc_blockchain_methods() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 1,
-            "method": "sprx_chainId"
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 1,
+                "method": "sprx_chainId"
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"], "sprax-devnet-1");
 
     // 2. sprx_blockNumber
@@ -48,14 +56,19 @@ async fn test_json_rpc_blockchain_methods() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 2,
-            "method": "sprx_blockNumber"
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 2,
+                "method": "sprx_blockNumber"
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"], 0);
 
     // 3. sprx_getChainInfo
@@ -63,14 +76,19 @@ async fn test_json_rpc_blockchain_methods() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 3,
-            "method": "sprx_getChainInfo"
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 3,
+                "method": "sprx_getChainInfo"
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"]["chainId"], "sprax-devnet-1");
     assert_eq!(body["result"]["height"], 0);
 
@@ -79,14 +97,19 @@ async fn test_json_rpc_blockchain_methods() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 4,
-            "method": "sprx_getSyncStatus"
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 4,
+                "method": "sprx_getSyncStatus"
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"]["isSyncing"], false);
 
     // Mine a block and query sprx_getBlockByNumber & sprx_getBlockHeader
@@ -96,15 +119,20 @@ async fn test_json_rpc_blockchain_methods() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 5,
-            "method": "sprx_getBlockByNumber",
-            "params": [1]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 5,
+                "method": "sprx_getBlockByNumber",
+                "params": [1]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 8192).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 8192).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"]["header"]["height"], 1);
 
     // sprx_getBlockTransactionCount
@@ -112,15 +140,20 @@ async fn test_json_rpc_blockchain_methods() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 6,
-            "method": "sprx_getBlockTransactionCount",
-            "params": [1]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 6,
+                "method": "sprx_getBlockTransactionCount",
+                "params": [1]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"], 0);
 }
 
@@ -143,7 +176,9 @@ async fn test_json_rpc_batch_requests() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     let arr = body.as_array().expect("must return JSON array for batch");
     assert_eq!(arr.len(), 3);
     assert_eq!(arr[0]["id"], 10);
@@ -162,7 +197,9 @@ async fn test_json_rpc_batch_requests() {
         .body(Body::from(empty_batch.to_string()))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["error"]["code"], -32600);
 }
 
@@ -175,14 +212,19 @@ async fn test_json_rpc_error_handling() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 99,
-            "method": "sprx_nonExistentMethod"
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 99,
+                "method": "sprx_nonExistentMethod"
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["error"]["code"], -32601);
 
     // Invalid params -> -32602
@@ -190,15 +232,20 @@ async fn test_json_rpc_error_handling() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 100,
-            "method": "sprx_getBlockByHash",
-            "params": ["invalid_hash_string"]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 100,
+                "method": "sprx_getBlockByHash",
+                "params": ["invalid_hash_string"]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["error"]["code"], -32602);
 }
 
@@ -237,17 +284,24 @@ async fn test_transaction_submission_and_status_lifecycle() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 201,
-            "method": "sprx_sendRawTransaction",
-            "params": [tx_val]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 201,
+                "method": "sprx_sendRawTransaction",
+                "params": [tx_val]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
-    let tx_hash = body["result"]["txHash"].as_str().expect("must return txHash");
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
+    let tx_hash = body["result"]["txHash"]
+        .as_str()
+        .expect("must return txHash");
     assert!(!tx_hash.is_empty());
 
     // 2. Query status -> pending in mempool
@@ -255,15 +309,20 @@ async fn test_transaction_submission_and_status_lifecycle() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 202,
-            "method": "sprx_getTransactionStatus",
-            "params": [tx_hash]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 202,
+                "method": "sprx_getTransactionStatus",
+                "params": [tx_hash]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"]["status"], "pending");
     assert_eq!(body["result"]["isPending"], true);
 
@@ -272,14 +331,19 @@ async fn test_transaction_submission_and_status_lifecycle() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 203,
-            "method": "sprx_getPendingTransactions"
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 203,
+                "method": "sprx_getPendingTransactions"
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"].as_array().unwrap().len(), 1);
 
     // 4. Mine block to finalize
@@ -291,15 +355,20 @@ async fn test_transaction_submission_and_status_lifecycle() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 204,
-            "method": "sprx_getTransactionStatus",
-            "params": [tx_hash]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 204,
+                "method": "sprx_getTransactionStatus",
+                "params": [tx_hash]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"]["status"], "finalized");
     assert_eq!(body["result"]["isFinalized"], true);
     assert_eq!(body["result"]["height"], 1);
@@ -309,15 +378,20 @@ async fn test_transaction_submission_and_status_lifecycle() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 205,
-            "method": "sprx_getTransactionReceipt",
-            "params": [tx_hash]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 205,
+                "method": "sprx_getTransactionReceipt",
+                "params": [tx_hash]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["result"]["success"], true);
 
     // 7. Verify recipient balance via sprx_getBalance
@@ -325,16 +399,24 @@ async fn test_transaction_submission_and_status_lifecycle() {
         .method("POST")
         .uri("/rpc")
         .header("content-type", "application/json")
-        .body(Body::from(json!({
-            "jsonrpc": "2.0",
-            "id": 206,
-            "method": "sprx_getBalance",
-            "params": [bob.address().to_hex()]
-        }).to_string()))
+        .body(Body::from(
+            json!({
+                "jsonrpc": "2.0",
+                "id": 206,
+                "method": "sprx_getBalance",
+                "params": [bob.address().to_hex()]
+            })
+            .to_string(),
+        ))
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
-    assert!(body["result"]["balance_sprx"].as_str().unwrap().contains("100"));
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
+    assert!(body["result"]["balance_sprx"]
+        .as_str()
+        .unwrap()
+        .contains("100"));
 }
 
 #[tokio::test]
@@ -349,7 +431,9 @@ async fn test_rest_api_v1_endpoints() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["chain_id"], "sprax-devnet-1");
 
     // GET /api/v1/chain/status
@@ -364,12 +448,17 @@ async fn test_rest_api_v1_endpoints() {
     // GET /api/v1/accounts/:address/balance
     let req = Request::builder()
         .method("GET")
-        .uri(format!("/api/v1/accounts/{}/balance", alice.address().to_hex()))
+        .uri(format!(
+            "/api/v1/accounts/{}/balance",
+            alice.address().to_hex()
+        ))
         .body(Body::empty())
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["balance_atto"], "10000000000000000000000");
 
     // GET /api/v1/validators
@@ -417,6 +506,8 @@ async fn test_rest_api_v1_endpoints() {
         .unwrap();
     let resp = router.clone().oneshot(req).await.unwrap();
     assert_eq!(resp.status(), StatusCode::OK);
-    let body: Value = serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap()).unwrap();
+    let body: Value =
+        serde_json::from_slice(&axum::body::to_bytes(resp.into_body(), 4096).await.unwrap())
+            .unwrap();
     assert_eq!(body["current_height"], 1);
 }

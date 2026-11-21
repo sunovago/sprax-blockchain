@@ -172,31 +172,76 @@ impl RpcServer {
             .route("/api/v1/blocks/hash/:hash", get(handle_api_block_by_hash))
             .route("/api/v1/transactions", post(handle_api_tx_submit))
             .route("/api/v1/transactions/:hash", get(handle_api_tx_by_hash))
-            .route("/api/v1/transactions/:hash/receipt", get(handle_api_tx_receipt))
-            .route("/api/v1/transactions/:hash/status", get(handle_api_tx_status))
+            .route(
+                "/api/v1/transactions/:hash/receipt",
+                get(handle_api_tx_receipt),
+            )
+            .route(
+                "/api/v1/transactions/:hash/status",
+                get(handle_api_tx_status),
+            )
             .route("/api/v1/accounts/:address", get(handle_api_account))
-            .route("/api/v1/accounts/:address/balance", get(handle_account_balance))
+            .route(
+                "/api/v1/accounts/:address/balance",
+                get(handle_account_balance),
+            )
             .route("/api/v1/accounts/:address/nonce", get(handle_account_nonce))
-            .route("/api/v1/accounts/:address/transactions", get(handle_api_account_txs))
+            .route(
+                "/api/v1/accounts/:address/transactions",
+                get(handle_api_account_txs),
+            )
             .route("/api/v1/validators", get(handle_api_validators))
-            .route("/api/v1/validators/:address", get(handle_api_validator_by_addr))
-            .route("/api/v1/validators/:address/rewards", get(handle_api_validator_rewards))
+            .route(
+                "/api/v1/validators/:address",
+                get(handle_api_validator_by_addr),
+            )
+            .route(
+                "/api/v1/validators/:address/rewards",
+                get(handle_api_validator_rewards),
+            )
             .route("/api/v1/staking/overview", get(handle_api_staking_overview))
-            .route("/api/v1/staking/delegations/:address", get(handle_api_delegations))
-            .route("/api/v1/staking/unbonding/:address", get(handle_api_unbonding))
+            .route(
+                "/api/v1/staking/delegations/:address",
+                get(handle_api_delegations),
+            )
+            .route(
+                "/api/v1/staking/unbonding/:address",
+                get(handle_api_unbonding),
+            )
             .route("/api/v1/network/status", get(handle_api_network_status))
             .route("/api/v1/network/peers", get(handle_api_network_peers))
             .route("/api/v1/network/sync", get(handle_api_network_sync))
             // Contract REST API (/api/v1/contracts/...)
             .route("/api/v1/contracts", get(handle_api_list_contracts))
             .route("/api/v1/contracts/deploy", post(handle_api_contract_deploy))
-            .route("/api/v1/contracts/:address", get(handle_api_contract_by_addr))
-            .route("/api/v1/contracts/:address/code", get(handle_api_contract_code))
-            .route("/api/v1/contracts/:address/storage", get(handle_api_contract_storage))
-            .route("/api/v1/contracts/:address/events", get(handle_api_contract_events))
-            .route("/api/v1/contracts/:address/call", post(handle_api_contract_call))
-            .route("/api/v1/contracts/:address/query", post(handle_contract_query))
-            .route("/api/v1/contracts/:address/transactions", get(handle_api_contract_txs))
+            .route(
+                "/api/v1/contracts/:address",
+                get(handle_api_contract_by_addr),
+            )
+            .route(
+                "/api/v1/contracts/:address/code",
+                get(handle_api_contract_code),
+            )
+            .route(
+                "/api/v1/contracts/:address/storage",
+                get(handle_api_contract_storage),
+            )
+            .route(
+                "/api/v1/contracts/:address/events",
+                get(handle_api_contract_events),
+            )
+            .route(
+                "/api/v1/contracts/:address/call",
+                post(handle_api_contract_call),
+            )
+            .route(
+                "/api/v1/contracts/:address/query",
+                post(handle_contract_query),
+            )
+            .route(
+                "/api/v1/contracts/:address/transactions",
+                get(handle_api_contract_txs),
+            )
             // Convenience routes (Wallet SDK & Explorer compatibility)
             .route("/health", get(handle_health))
             .route("/status", get(handle_status))
@@ -649,7 +694,11 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
             match Hash32::from_hex(hash_str) {
                 Ok(hash) => {
                     if let Some((_tx, receipt, height)) = state.node.get_transaction(&hash) {
-                        let status_str = if receipt.success { "finalized" } else { "failed" };
+                        let status_str = if receipt.success {
+                            "finalized"
+                        } else {
+                            "failed"
+                        };
                         let val = json!({
                             "txHash": hash.to_hex(),
                             "status": status_str,
@@ -949,7 +998,9 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
                         &addr,
                     );
                     match record_res {
-                        Ok(Some(rec)) => JsonRpcResponse::success(id, json!(format!("{:?}", rec.status))),
+                        Ok(Some(rec)) => {
+                            JsonRpcResponse::success(id, json!(format!("{:?}", rec.status)))
+                        }
                         Ok(None) => JsonRpcResponse::success(id, json!("Unregistered")),
                         Err(e) => JsonRpcResponse::error(id, -32000, e.to_string(), None),
                     }
@@ -1188,9 +1239,19 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
             match parse_transaction(tx_val) {
                 Ok(tx) => match state.node.submit_transaction(tx) {
                     Ok(hash) => JsonRpcResponse::success(id, json!({ "tx_hash": hash.to_hex() })),
-                    Err(e) => JsonRpcResponse::error(id, -32000, format!("Deployment rejected: {e}"), None),
+                    Err(e) => JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        format!("Deployment rejected: {e}"),
+                        None,
+                    ),
                 },
-                Err(err) => JsonRpcResponse::error(id, -32602, format!("Invalid deployment transaction: {err}"), None),
+                Err(err) => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    format!("Invalid deployment transaction: {err}"),
+                    None,
+                ),
             }
         }
 
@@ -1206,9 +1267,19 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
             match parse_transaction(tx_val) {
                 Ok(tx) => match state.node.submit_transaction(tx) {
                     Ok(hash) => JsonRpcResponse::success(id, json!({ "tx_hash": hash.to_hex() })),
-                    Err(e) => JsonRpcResponse::error(id, -32000, format!("Contract call rejected: {e}"), None),
+                    Err(e) => JsonRpcResponse::error(
+                        id,
+                        -32000,
+                        format!("Contract call rejected: {e}"),
+                        None,
+                    ),
                 },
-                Err(err) => JsonRpcResponse::error(id, -32602, format!("Invalid call transaction: {err}"), None),
+                Err(err) => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    format!("Invalid call transaction: {err}"),
+                    None,
+                ),
             }
         }
 
@@ -1237,7 +1308,12 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
                     Ok(None) => JsonRpcResponse::success(id, Value::Null),
                     Err(e) => JsonRpcResponse::error(id, -32000, e.to_string(), None),
                 },
-                None => JsonRpcResponse::error(id, -32602, "Invalid contract address format".into(), None),
+                None => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Invalid contract address format".into(),
+                    None,
+                ),
             }
         }
 
@@ -1255,7 +1331,12 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
             } else if let Ok(hash) = Hash32::from_hex(target_str) {
                 state.node.get_contract_code_by_hash(hash)
             } else {
-                return JsonRpcResponse::error(id, -32602, "Invalid address or code hash format".into(), None);
+                return JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Invalid address or code hash format".into(),
+                    None,
+                );
             };
 
             match code_res {
@@ -1273,12 +1354,19 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
 
         "sprx_getContractStorage" => {
             let params = req.params.as_ref().and_then(Value::as_array);
-            let addr_str = params.and_then(|p| p.first()).and_then(Value::as_str).unwrap_or("");
-            let key_str = params.and_then(|p| p.get(1)).and_then(Value::as_str).unwrap_or("");
+            let addr_str = params
+                .and_then(|p| p.first())
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let key_str = params
+                .and_then(|p| p.get(1))
+                .and_then(Value::as_str)
+                .unwrap_or("");
 
             match parse_address(addr_str) {
                 Some(addr) => {
-                    let key_bytes = hex::decode(key_str).unwrap_or_else(|_| key_str.as_bytes().to_vec());
+                    let key_bytes =
+                        hex::decode(key_str).unwrap_or_else(|_| key_str.as_bytes().to_vec());
                     match state.node.get_contract_storage(addr, &key_bytes) {
                         Ok(Some(val)) => {
                             let resp = json!({
@@ -1291,14 +1379,25 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
                         Err(e) => JsonRpcResponse::error(id, -32000, e.to_string(), None),
                     }
                 }
-                None => JsonRpcResponse::error(id, -32602, "Invalid contract address format".into(), None),
+                None => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Invalid contract address format".into(),
+                    None,
+                ),
             }
         }
 
         "sprx_getContractEvents" => {
             let params = req.params.as_ref().and_then(Value::as_array);
-            let addr_str = params.and_then(|p| p.first()).and_then(Value::as_str).unwrap_or("");
-            let limit = params.and_then(|p| p.get(1)).and_then(Value::as_u64).unwrap_or(50) as usize;
+            let addr_str = params
+                .and_then(|p| p.first())
+                .and_then(Value::as_str)
+                .unwrap_or("");
+            let limit = params
+                .and_then(|p| p.get(1))
+                .and_then(Value::as_u64)
+                .unwrap_or(50) as usize;
 
             match parse_address(addr_str) {
                 Some(addr) => {
@@ -1309,7 +1408,9 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
                         if let Some(block) = state.node.get_block_by_height(h) {
                             for tx in &block.body.transactions {
                                 let tx_hash = Hasher::tx_hash(tx).unwrap_or(Hash32::ZERO);
-                                if let Some((_tx, receipt, _h)) = state.node.get_transaction(&tx_hash) {
+                                if let Some((_tx, receipt, _h)) =
+                                    state.node.get_transaction(&tx_hash)
+                                {
                                     for ev in &receipt.events {
                                         if ev.contract == addr {
                                             events.push(json!({
@@ -1335,7 +1436,12 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
                     }
                     JsonRpcResponse::success(id, json!(events))
                 }
-                None => JsonRpcResponse::error(id, -32602, "Invalid contract address format".into(), None),
+                None => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Invalid contract address format".into(),
+                    None,
+                ),
             }
         }
 
@@ -1373,7 +1479,12 @@ async fn dispatch_single_rpc(state: &Arc<RpcServerState>, req: JsonRpcRequest) -
                     }
                     None => JsonRpcResponse::success(id, Value::Null),
                 },
-                Err(_) => JsonRpcResponse::error(id, -32602, "Invalid transaction hash format".into(), None),
+                Err(_) => JsonRpcResponse::error(
+                    id,
+                    -32602,
+                    "Invalid transaction hash format".into(),
+                    None,
+                ),
             }
         }
 
@@ -1857,14 +1968,10 @@ async fn handle_api_validator_by_addr(
 
     let ledger = state.node.ledger();
     let ledger_guard = ledger.read();
-    let val_record = sprax_core::state::StateAccessor::get_validator_record(
-        ledger_guard.store(),
-        &addr,
-    );
-    let val_stake = sprax_core::state::StateAccessor::get_validator_stake(
-        ledger_guard.store(),
-        &addr,
-    );
+    let val_record =
+        sprax_core::state::StateAccessor::get_validator_record(ledger_guard.store(), &addr);
+    let val_stake =
+        sprax_core::state::StateAccessor::get_validator_stake(ledger_guard.store(), &addr);
 
     match (val_record, val_stake) {
         (Ok(Some(rec)), Ok(stake)) => (
@@ -2194,8 +2301,14 @@ async fn handle_api_list_contracts(
     State(state): State<Arc<RpcServerState>>,
     Query(params): Query<HashMap<String, String>>,
 ) -> impl IntoResponse {
-    let limit = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(20);
-    let offset = params.get("offset").and_then(|v| v.parse().ok()).unwrap_or(0);
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(20);
+    let offset = params
+        .get("offset")
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(0);
     match state.node.list_contracts(limit, offset) {
         Ok(list) => {
             let res: Vec<Value> = list
@@ -2211,7 +2324,10 @@ async fn handle_api_list_contracts(
                     })
                 })
                 .collect();
-            (StatusCode::OK, Json(json!({ "contracts": res, "total": res.len() })))
+            (
+                StatusCode::OK,
+                Json(json!({ "contracts": res, "total": res.len() })),
+            )
         }
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
@@ -2327,9 +2443,15 @@ async fn handle_api_contract_storage(
             ),
         }
     } else {
-        let limit = params.get("limit").and_then(|v| v.parse().ok()).unwrap_or(50);
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(50);
         let prefix = params.get("prefix").map(|p| p.as_bytes()).unwrap_or(b"");
-        match state.node.get_contract_storage_prefix(address, prefix, limit) {
+        match state
+            .node
+            .get_contract_storage_prefix(address, prefix, limit)
+        {
             Ok(records) => {
                 let items: Vec<Value> = records
                     .into_iter()
@@ -2341,7 +2463,10 @@ async fn handle_api_contract_storage(
                         })
                     })
                     .collect();
-                (StatusCode::OK, Json(json!({ "address": address.to_string(), "storage": items })))
+                (
+                    StatusCode::OK,
+                    Json(json!({ "address": address.to_string(), "storage": items })),
+                )
             }
             Err(e) => (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -2386,7 +2511,10 @@ async fn handle_api_contract_events(
             }
         }
     }
-    (StatusCode::OK, Json(json!({ "address": address.to_string(), "events": contract_events })))
+    (
+        StatusCode::OK,
+        Json(json!({ "address": address.to_string(), "events": contract_events })),
+    )
 }
 
 async fn handle_api_contract_txs(
@@ -2434,7 +2562,10 @@ async fn handle_api_contract_txs(
             }
         }
     }
-    (StatusCode::OK, Json(json!({ "address": address.to_string(), "transactions": contract_txs })))
+    (
+        StatusCode::OK,
+        Json(json!({ "address": address.to_string(), "transactions": contract_txs })),
+    )
 }
 
 async fn handle_api_contract_deploy(
@@ -2717,13 +2848,19 @@ fn parse_transaction(val: Value) -> Result<Transaction, String> {
                     _ => return Err("Invalid bytecode format".into()),
                 };
                 messages.push(TxMessage::StoreCode { wasm_bytecode });
-            } else if msg_type == "InstantiateContract" || msg_type == "instantiate_contract" || msg_type == "instantiate" {
+            } else if msg_type == "InstantiateContract"
+                || msg_type == "instantiate_contract"
+                || msg_type == "instantiate"
+            {
                 let code_id_str = msg_val
                     .get("code_id")
                     .and_then(|v| v.as_str())
                     .ok_or("Missing 'code_id' in InstantiateContract message")?;
-                let code_id = Hash32::from_hex(code_id_str).map_err(|e| format!("Invalid code_id hash: {e}"))?;
-                let msg_val = msg_val.get("msg").ok_or("Missing 'msg' in InstantiateContract message")?;
+                let code_id = Hash32::from_hex(code_id_str)
+                    .map_err(|e| format!("Invalid code_id hash: {e}"))?;
+                let msg_val = msg_val
+                    .get("msg")
+                    .ok_or("Missing 'msg' in InstantiateContract message")?;
                 let msg = match msg_val {
                     Value::String(s) => {
                         if let Ok(b) = hex::decode(s.trim_start_matches("0x")) {
@@ -2765,8 +2902,11 @@ fn parse_transaction(val: Value) -> Result<Transaction, String> {
                     .get("new_code_id")
                     .and_then(|v| v.as_str())
                     .ok_or("Missing 'new_code_id' in MigrateContract message")?;
-                let new_code_id = Hash32::from_hex(new_code_id_str).map_err(|e| format!("Invalid new_code_id: {e}"))?;
-                let msg_val = msg_val.get("msg").ok_or("Missing 'msg' in MigrateContract message")?;
+                let new_code_id = Hash32::from_hex(new_code_id_str)
+                    .map_err(|e| format!("Invalid new_code_id: {e}"))?;
+                let msg_val = msg_val
+                    .get("msg")
+                    .ok_or("Missing 'msg' in MigrateContract message")?;
                 let msg = match msg_val {
                     Value::String(s) => {
                         if let Ok(b) = hex::decode(s.trim_start_matches("0x")) {

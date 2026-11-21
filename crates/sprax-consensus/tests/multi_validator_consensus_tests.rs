@@ -68,12 +68,29 @@ fn test_1_validator_consensus_convergence() {
     engine.propose_block(block_hash, proposer.address).unwrap();
     assert_eq!(engine.current_step(), RoundStep::Prevote);
 
-    let pv = create_signed_vote(&keypairs[0], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+    let pv = create_signed_vote(
+        &keypairs[0],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(engine.receive_prevote(pv).unwrap());
     assert_eq!(engine.current_step(), RoundStep::Precommit);
 
-    let pc = create_signed_vote(&keypairs[0], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
-    let sigs = engine.receive_precommit(pc).unwrap().expect("1-val quorum reached");
+    let pc = create_signed_vote(
+        &keypairs[0],
+        genesis,
+        VoteType::Precommit,
+        1,
+        0,
+        Some(block_hash),
+    );
+    let sigs = engine
+        .receive_precommit(pc)
+        .unwrap()
+        .expect("1-val quorum reached");
     assert_eq!(engine.current_step(), RoundStep::Commit);
     assert_eq!(sigs.len(), 1);
 }
@@ -92,28 +109,73 @@ fn test_3_validator_consensus_all_required_for_equal_powers() {
     engine.propose_block(block_hash, proposer.address).unwrap();
 
     // Node 0 prevotes
-    let pv0 = create_signed_vote(&keypairs[0], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+    let pv0 = create_signed_vote(
+        &keypairs[0],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(!engine.receive_prevote(pv0).unwrap());
 
     // Node 1 prevotes (total power 2 < 3)
-    let pv1 = create_signed_vote(&keypairs[1], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+    let pv1 = create_signed_vote(
+        &keypairs[1],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(!engine.receive_prevote(pv1).unwrap());
 
     // Node 2 prevotes (total power 3 >= 3 -> quorum!)
-    let pv2 = create_signed_vote(&keypairs[2], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+    let pv2 = create_signed_vote(
+        &keypairs[2],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(engine.receive_prevote(pv2).unwrap());
     assert_eq!(engine.current_step(), RoundStep::Precommit);
 
     // Precommits: first 2 do not commit
-    let pc0 = create_signed_vote(&keypairs[0], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
+    let pc0 = create_signed_vote(
+        &keypairs[0],
+        genesis,
+        VoteType::Precommit,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(engine.receive_precommit(pc0).unwrap().is_none());
 
-    let pc1 = create_signed_vote(&keypairs[1], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
+    let pc1 = create_signed_vote(
+        &keypairs[1],
+        genesis,
+        VoteType::Precommit,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(engine.receive_precommit(pc1).unwrap().is_none());
 
     // 3rd precommit finalizes block
-    let pc2 = create_signed_vote(&keypairs[2], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
-    let commit_sigs = engine.receive_precommit(pc2).unwrap().expect("block committed");
+    let pc2 = create_signed_vote(
+        &keypairs[2],
+        genesis,
+        VoteType::Precommit,
+        1,
+        0,
+        Some(block_hash),
+    );
+    let commit_sigs = engine
+        .receive_precommit(pc2)
+        .unwrap()
+        .expect("block committed");
     assert_eq!(commit_sigs.len(), 3);
 }
 
@@ -132,20 +194,51 @@ fn test_4_validator_consensus_bft_tolerates_1_byzantine() {
 
     // Nodes 0, 1, 2 prevote
     for i in 0..2 {
-        let pv = create_signed_vote(&keypairs[i], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+        let pv = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Prevote,
+            1,
+            0,
+            Some(block_hash),
+        );
         assert!(!engine.receive_prevote(pv).unwrap());
     }
-    let pv2 = create_signed_vote(&keypairs[2], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+    let pv2 = create_signed_vote(
+        &keypairs[2],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(engine.receive_prevote(pv2).unwrap());
     assert_eq!(engine.current_step(), RoundStep::Precommit);
 
     // Nodes 0, 1, 2 precommit
     for i in 0..2 {
-        let pc = create_signed_vote(&keypairs[i], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
+        let pc = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Precommit,
+            1,
+            0,
+            Some(block_hash),
+        );
         assert!(engine.receive_precommit(pc).unwrap().is_none());
     }
-    let pc2 = create_signed_vote(&keypairs[2], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
-    let commit_sigs = engine.receive_precommit(pc2).unwrap().expect("block committed");
+    let pc2 = create_signed_vote(
+        &keypairs[2],
+        genesis,
+        VoteType::Precommit,
+        1,
+        0,
+        Some(block_hash),
+    );
+    let commit_sigs = engine
+        .receive_precommit(pc2)
+        .unwrap()
+        .expect("block committed");
     assert_eq!(commit_sigs.len(), 3);
 }
 
@@ -164,21 +257,52 @@ fn test_7_validator_consensus_bft_tolerates_2_byzantine() {
 
     // First 4 prevotes do not reach quorum (4 < 5)
     for i in 0..4 {
-        let pv = create_signed_vote(&keypairs[i], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+        let pv = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Prevote,
+            1,
+            0,
+            Some(block_hash),
+        );
         assert!(!engine.receive_prevote(pv).unwrap());
     }
     // 5th prevote achieves quorum
-    let pv4 = create_signed_vote(&keypairs[4], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+    let pv4 = create_signed_vote(
+        &keypairs[4],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(engine.receive_prevote(pv4).unwrap());
     assert_eq!(engine.current_step(), RoundStep::Precommit);
 
     // Precommits: 5th achieves commit
     for i in 0..4 {
-        let pc = create_signed_vote(&keypairs[i], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
+        let pc = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Precommit,
+            1,
+            0,
+            Some(block_hash),
+        );
         assert!(engine.receive_precommit(pc).unwrap().is_none());
     }
-    let pc4 = create_signed_vote(&keypairs[4], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
-    let commit_sigs = engine.receive_precommit(pc4).unwrap().expect("block committed");
+    let pc4 = create_signed_vote(
+        &keypairs[4],
+        genesis,
+        VoteType::Precommit,
+        1,
+        0,
+        Some(block_hash),
+    );
+    let commit_sigs = engine
+        .receive_precommit(pc4)
+        .unwrap()
+        .expect("block committed");
     assert_eq!(commit_sigs.len(), 5);
 }
 
@@ -198,23 +322,54 @@ fn test_10_validator_heterogeneous_voting_power_distribution() {
 
     // Nodes 0 (25), 1 (20), 2 (15) vote: 25+20+15 = 60 < 67 -> no quorum
     for i in 0..3 {
-        let pv = create_signed_vote(&keypairs[i], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+        let pv = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Prevote,
+            1,
+            0,
+            Some(block_hash),
+        );
         assert!(!engine.receive_prevote(pv).unwrap());
     }
 
     // Node 3 (12) votes: 60 + 12 = 72 >= 67 -> quorum!
-    let pv3 = create_signed_vote(&keypairs[3], genesis, VoteType::Prevote, 1, 0, Some(block_hash));
+    let pv3 = create_signed_vote(
+        &keypairs[3],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_hash),
+    );
     assert!(engine.receive_prevote(pv3).unwrap());
     assert_eq!(engine.current_step(), RoundStep::Precommit);
 
     // Precommits from nodes 0, 1, 2 (60 power)
     for i in 0..3 {
-        let pc = create_signed_vote(&keypairs[i], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
+        let pc = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Precommit,
+            1,
+            0,
+            Some(block_hash),
+        );
         assert!(engine.receive_precommit(pc).unwrap().is_none());
     }
     // Node 3 precommits -> commit!
-    let pc3 = create_signed_vote(&keypairs[3], genesis, VoteType::Precommit, 1, 0, Some(block_hash));
-    let commit_sigs = engine.receive_precommit(pc3).unwrap().expect("block committed");
+    let pc3 = create_signed_vote(
+        &keypairs[3],
+        genesis,
+        VoteType::Precommit,
+        1,
+        0,
+        Some(block_hash),
+    );
+    let commit_sigs = engine
+        .receive_precommit(pc3)
+        .unwrap()
+        .expect("block committed");
     assert_eq!(commit_sigs.len(), 4);
 }
 
@@ -234,8 +389,22 @@ fn test_byzantine_conflicting_proposals_round_advancement() {
     engine.propose_block(block_a, proposer_r0.address).unwrap();
 
     // Node 0 prevotes block A, Node 1 prevotes block B (conflict / split)
-    let pv0 = create_signed_vote(&keypairs[0], genesis, VoteType::Prevote, 1, 0, Some(block_a));
-    let pv1 = create_signed_vote(&keypairs[1], genesis, VoteType::Prevote, 1, 0, Some(block_b));
+    let pv0 = create_signed_vote(
+        &keypairs[0],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_a),
+    );
+    let pv1 = create_signed_vote(
+        &keypairs[1],
+        genesis,
+        VoteType::Prevote,
+        1,
+        0,
+        Some(block_b),
+    );
     let pv2_nil = create_signed_vote(&keypairs[2], genesis, VoteType::Prevote, 1, 0, None);
 
     assert!(!engine.receive_prevote(pv0).unwrap());
@@ -254,7 +423,14 @@ fn test_byzantine_conflicting_proposals_round_advancement() {
 
     // 3 nodes prevote block C in Round 1
     for i in 0..3 {
-        let pv = create_signed_vote(&keypairs[i], genesis, VoteType::Prevote, 1, 1, Some(block_c));
+        let pv = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Prevote,
+            1,
+            1,
+            Some(block_c),
+        );
         let reached = engine.receive_prevote(pv).unwrap();
         if i == 2 {
             assert!(reached);
@@ -266,11 +442,28 @@ fn test_byzantine_conflicting_proposals_round_advancement() {
 
     // 3 nodes precommit block C in Round 1
     for i in 0..2 {
-        let pc = create_signed_vote(&keypairs[i], genesis, VoteType::Precommit, 1, 1, Some(block_c));
+        let pc = create_signed_vote(
+            &keypairs[i],
+            genesis,
+            VoteType::Precommit,
+            1,
+            1,
+            Some(block_c),
+        );
         assert!(engine.receive_precommit(pc).unwrap().is_none());
     }
-    let pc2 = create_signed_vote(&keypairs[2], genesis, VoteType::Precommit, 1, 1, Some(block_c));
-    let commit_sigs = engine.receive_precommit(pc2).unwrap().expect("committed at round 1");
+    let pc2 = create_signed_vote(
+        &keypairs[2],
+        genesis,
+        VoteType::Precommit,
+        1,
+        1,
+        Some(block_c),
+    );
+    let commit_sigs = engine
+        .receive_precommit(pc2)
+        .unwrap()
+        .expect("committed at round 1");
     assert_eq!(commit_sigs.len(), 3);
 }
 
@@ -286,8 +479,22 @@ fn test_consensus_snapshot_crash_and_recovery() {
     engine.propose_block(block_hash, proposer.address).unwrap();
 
     // Nodes 0 and 1 prevote (40 + 35 = 75 >= 67 quorum)
-    let pv0 = create_signed_vote(&keypairs[0], genesis, VoteType::Prevote, 5, 0, Some(block_hash));
-    let pv1 = create_signed_vote(&keypairs[1], genesis, VoteType::Prevote, 5, 0, Some(block_hash));
+    let pv0 = create_signed_vote(
+        &keypairs[0],
+        genesis,
+        VoteType::Prevote,
+        5,
+        0,
+        Some(block_hash),
+    );
+    let pv1 = create_signed_vote(
+        &keypairs[1],
+        genesis,
+        VoteType::Prevote,
+        5,
+        0,
+        Some(block_hash),
+    );
     assert!(!engine.receive_prevote(pv0).unwrap());
     assert!(engine.receive_prevote(pv1).unwrap());
 
@@ -316,10 +523,27 @@ fn test_consensus_snapshot_crash_and_recovery() {
     assert_eq!(recovered_engine.current_step(), RoundStep::Precommit);
 
     // Nodes 0 and 1 precommit on recovered engine
-    let pc0 = create_signed_vote(&keypairs[0], genesis, VoteType::Precommit, 5, 0, Some(block_hash));
-    let pc1 = create_signed_vote(&keypairs[1], genesis, VoteType::Precommit, 5, 0, Some(block_hash));
+    let pc0 = create_signed_vote(
+        &keypairs[0],
+        genesis,
+        VoteType::Precommit,
+        5,
+        0,
+        Some(block_hash),
+    );
+    let pc1 = create_signed_vote(
+        &keypairs[1],
+        genesis,
+        VoteType::Precommit,
+        5,
+        0,
+        Some(block_hash),
+    );
     assert!(recovered_engine.receive_precommit(pc0).unwrap().is_none());
-    let sigs = recovered_engine.receive_precommit(pc1).unwrap().expect("block committed");
+    let sigs = recovered_engine
+        .receive_precommit(pc1)
+        .unwrap()
+        .expect("block committed");
     assert_eq!(sigs.len(), 2);
 }
 
@@ -344,18 +568,38 @@ fn test_reward_distribution_multi_validator_and_delegators() {
         max_change_rate_bps: 100,
     };
 
-    staking.register_validator(val0, keypairs[0].public_key_bytes().to_vec(), desc.clone(), Amount::from_sprx_whole(10_000).unwrap(), comm.clone()).unwrap();
-    staking.register_validator(val1, keypairs[1].public_key_bytes().to_vec(), desc, Amount::from_sprx_whole(10_000).unwrap(), comm).unwrap();
-    staking.delegate(del, val0, Amount::from_sprx_whole(5_000).unwrap()).unwrap();
+    staking
+        .register_validator(
+            val0,
+            keypairs[0].public_key_bytes().to_vec(),
+            desc.clone(),
+            Amount::from_sprx_whole(10_000).unwrap(),
+            comm.clone(),
+        )
+        .unwrap();
+    staking
+        .register_validator(
+            val1,
+            keypairs[1].public_key_bytes().to_vec(),
+            desc,
+            Amount::from_sprx_whole(10_000).unwrap(),
+            comm,
+        )
+        .unwrap();
+    staking
+        .delegate(del, val0, Amount::from_sprx_whole(5_000).unwrap())
+        .unwrap();
 
     let mut reward_keeper = RewardKeeper::new(RewardParams::default());
-    let distribution = reward_keeper.distribute_block_rewards(
-        1,
-        val0,
-        Amount::from_sprx_whole(1).unwrap(),
-        &[val0, val1],
-        &staking,
-    ).unwrap();
+    let distribution = reward_keeper
+        .distribute_block_rewards(
+            1,
+            val0,
+            Amount::from_sprx_whole(1).unwrap(),
+            &[val0, val1],
+            &staking,
+        )
+        .unwrap();
 
     assert_eq!(distribution.total_pot, Amount::from_sprx_whole(3).unwrap());
     assert!(distribution.proposer_bonus.as_atto() > 0);
@@ -369,10 +613,18 @@ fn test_reward_distribution_multi_validator_and_delegators() {
     reward_keeper.save_to_file(&reward_file).unwrap();
 
     let mut reloaded_reward_keeper = RewardKeeper::load_from_file(&reward_file).unwrap();
-    assert_eq!(reloaded_reward_keeper.community_pool(), reward_keeper.community_pool());
+    assert_eq!(
+        reloaded_reward_keeper.community_pool(),
+        reward_keeper.community_pool()
+    );
 
     // Claim reward on reloaded keeper
-    let claimed = reloaded_reward_keeper.claim_delegator_reward(&del, &val0).unwrap();
+    let claimed = reloaded_reward_keeper
+        .claim_delegator_reward(&del, &val0)
+        .unwrap();
     assert!(claimed.as_atto() > 0);
-    assert_eq!(reloaded_reward_keeper.get_delegator_reward(&del, &val0), Amount::ZERO);
+    assert_eq!(
+        reloaded_reward_keeper.get_delegator_reward(&del, &val0),
+        Amount::ZERO
+    );
 }
