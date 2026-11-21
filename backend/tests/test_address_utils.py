@@ -1,7 +1,10 @@
-import pytest
 from app.modules.blockchain.address import (
-    is_valid_address, is_valid_valoper, is_valid_tx_hash,
-    is_block_height, atto_to_sprx, sprx_to_atto
+    atto_to_sprx,
+    is_block_height,
+    is_valid_address,
+    is_valid_tx_hash,
+    is_valid_valoper,
+    sprx_to_atto,
 )
 
 

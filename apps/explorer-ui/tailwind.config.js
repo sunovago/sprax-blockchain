@@ -25,11 +25,13 @@ export default {
           primary: "var(--bg-primary)",
           surface: "var(--bg-surface)",
           elevated: "var(--bg-surface-elevated)",
+          "surface-elevated": "var(--bg-surface-elevated)",
           hover: "var(--bg-hover)",
         },
         border: {
           subtle: "var(--border-subtle)",
           strong: "var(--border-strong)",
+          prominent: "var(--border-strong)",
           hover: "var(--border-hover)",
         },
         text: {

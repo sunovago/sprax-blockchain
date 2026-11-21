@@ -1,0 +1,352 @@
+//! Persist votes before releasing signatures. Keep this database with validator keys.
+use redb::{Database, ReadableTable, TableDefinition};
+use serde::{Deserialize, Serialize};
+use sprax_consensus::{SignedProposal, ValidatorSet, Vote, VoteType};
+use sprax_crypto::Ed25519Keypair;
+use sprax_types::{Block, Hash32};
+use std::{io::Write, path::Path, sync::Arc};
+
+const TABLE: TableDefinition<&str, &[u8]> = TableDefinition::new("signing");
+
+#[derive(Debug, Serialize, Deserialize)]
+struct Identity {
+    vote_signing_version: u32,
+    journal_format_version: u32,
+    genesis: Hash32,
+    public_key: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SigningState {
+    pub vote: Vote,
+    pub locked_block: Option<Hash32>,
+    pub locked_round: Option<u32>,
+    pub locked_block_data: Option<Block>,
+}
+
+#[derive(Debug, Clone)]
+pub struct SigningJournal {
+    db: Arc<Database>,
+    public_key: Vec<u8>,
+    genesis: Hash32,
+}
+
+impl SigningJournal {
+    pub fn open(path: &Path, genesis: Hash32, signer: &Ed25519Keypair) -> Result<Self, String> {
+        let marker = path.with_extension("initialized");
+        if marker.exists() && !path.exists() {
+            return Err(
+                "validator signing database is missing; refusing to reset signing history".into(),
+            );
+        }
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+        let db = Database::create(path).map_err(|e| e.to_string())?;
+        let identity = Identity {
+            vote_signing_version: 2,
+            journal_format_version: 2,
+            genesis,
+            public_key: signer.public_key_bytes().to_vec(),
+        };
+        let encoded = serde_json::to_vec(&identity).map_err(|e| e.to_string())?;
+        let write = db.begin_write().map_err(|e| e.to_string())?;
+        {
+            let mut table = write.open_table(TABLE).map_err(|e| e.to_string())?;
+            let saved = table
+                .get("identity")
+                .map_err(|e| e.to_string())?
+                .map(|v| v.value().to_vec());
+            if let Some(saved) = saved {
+                if saved != encoded {
+                    return Err("signing journal identity mismatch".into());
+                }
+            } else {
+                table
+                    .insert("identity", encoded.as_slice())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        write.commit().map_err(|e| e.to_string())?;
+        if marker.exists() {
+            if std::fs::read(&marker).map_err(|e| e.to_string())? != encoded {
+                return Err("signing initialization marker identity mismatch".into());
+            }
+        } else {
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(&marker)
+                .map_err(|e| e.to_string())?;
+            file.write_all(&encoded).map_err(|e| e.to_string())?;
+            file.sync_all().map_err(|e| e.to_string())?;
+            #[cfg(unix)]
+            if let Some(parent) = path.parent() {
+                std::fs::File::open(parent)
+                    .and_then(|dir| dir.sync_all())
+                    .map_err(|e| e.to_string())?;
+            }
+        }
+        Ok(Self {
+            db: Arc::new(db),
+            public_key: identity.public_key,
+            genesis,
+        })
+    }
+
+    pub fn state(&self) -> Result<Option<SigningState>, String> {
+        let read = self.db.begin_read().map_err(|e| e.to_string())?;
+        let table = read.open_table(TABLE).map_err(|e| e.to_string())?;
+        let result = table
+            .get("state")
+            .map_err(|e| e.to_string())?
+            .map(|v| serde_json::from_slice(v.value()).map_err(|e| e.to_string()))
+            .transpose();
+        result
+    }
+
+    /// Proposal signatures have a separate durable sequence from prevotes/precommits.
+    pub fn latest_proposal(&self) -> Result<Option<SignedProposal>, String> {
+        let read = self.db.begin_read().map_err(|e| e.to_string())?;
+        let table = read.open_table(TABLE).map_err(|e| e.to_string())?;
+        let result = table
+            .get("proposal")
+            .map_err(|e| e.to_string())?
+            .map(|v| serde_json::from_slice(v.value()).map_err(|e| e.to_string()))
+            .transpose();
+        result
+    }
+
+    pub fn sign_proposal(
+        &self,
+        mut proposal: SignedProposal,
+        signer: &Ed25519Keypair,
+        validators: &ValidatorSet,
+    ) -> Result<SignedProposal, String> {
+        if proposal.genesis != self.genesis
+            || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
+            || proposal.signer != signer.address()
+        {
+            return Err("proposal signer or genesis does not match journal identity".into());
+        }
+        proposal
+            .verify_valid_round(validators)
+            .map_err(|error| error.to_string())?;
+        let write = self.db.begin_write().map_err(|e| e.to_string())?;
+        {
+            let mut table = write.open_table(TABLE).map_err(|e| e.to_string())?;
+            let previous: Option<SignedProposal> = table
+                .get("proposal")
+                .map_err(|e| e.to_string())?
+                .map(|value| serde_json::from_slice(value.value()).map_err(|e| e.to_string()))
+                .transpose()?;
+            let position =
+                |proposal: &SignedProposal| (proposal.block.header.height, proposal.round);
+            if let Some(previous) = previous {
+                if position(&proposal) < position(&previous) {
+                    return Err("refusing proposal signing regression".into());
+                }
+                if position(&proposal) == position(&previous) {
+                    if proposal.sign_bytes().map_err(|e| e.to_string())?
+                        != previous.sign_bytes().map_err(|e| e.to_string())?
+                    {
+                        return Err("refusing conflicting proposal at the same height/round".into());
+                    }
+                    return Ok(previous);
+                }
+            }
+            let state: Option<SigningState> = table
+                .get("state")
+                .map_err(|e| e.to_string())?
+                .map(|value| serde_json::from_slice(value.value()).map_err(|e| e.to_string()))
+                .transpose()?;
+            if let Some(state) = state {
+                if position(&proposal) <= (state.vote.height, state.vote.round) {
+                    return Err("proposal predates signed vote".into());
+                }
+                if proposal.block.header.height == state.vote.height
+                    && state.locked_block.is_some()
+                    && state.locked_block
+                        != Some(
+                            sprax_crypto::Hasher::block_hash(&proposal.block.header)
+                                .map_err(|e| e.to_string())?,
+                        )
+                {
+                    let locked_round = state.locked_round.ok_or("durable lock has no round")?;
+                    if proposal
+                        .valid_round
+                        .is_none_or(|valid_round| valid_round <= locked_round)
+                    {
+                        return Err("proposal conflicts with durable lock".into());
+                    }
+                }
+            }
+            proposal.signature = signer.sign(&proposal.sign_bytes().map_err(|e| e.to_string())?);
+            let bytes = serde_json::to_vec(&proposal).map_err(|e| e.to_string())?;
+            table
+                .insert("proposal", bytes.as_slice())
+                .map_err(|e| e.to_string())?;
+        }
+        write.commit().map_err(|e| e.to_string())?;
+        Ok(proposal)
+    }
+
+    /// Database write transactions serialize competing callers; a signature is returned
+    /// only after its record is durable. Identical retries return the persisted signature.
+    pub fn sign(&self, vote: Vote, signer: &Ed25519Keypair) -> Result<Vote, String> {
+        self.sign_with_block(vote, signer, None, None)
+    }
+
+    /// The caller must validate execution first. A non-nil precommit atomically
+    /// persists its complete block before releasing a signature.
+    pub fn sign_with_block(
+        &self,
+        mut vote: Vote,
+        signer: &Ed25519Keypair,
+        block: Option<Block>,
+        unlock_proof: Option<(&ValidatorSet, &[Vote])>,
+    ) -> Result<Vote, String> {
+        if vote.block_hash.is_some()
+            && (vote.vote_type == VoteType::Precommit || unlock_proof.is_some())
+        {
+            let data = block.as_ref().ok_or(
+                "non-nil precommit or certified prevote requires complete validated block",
+            )?;
+            if data.header.height != vote.height
+                || Some(sprax_crypto::Hasher::block_hash(&data.header).map_err(|e| e.to_string())?)
+                    != vote.block_hash
+                || !data.last_commit.is_empty()
+            {
+                return Err("candidate block does not match vote or contains a certificate".into());
+            }
+        } else if block.is_some() {
+            return Err("block data requires a non-nil precommit or certified prevote".into());
+        }
+        if vote.genesis != self.genesis
+            || signer.public_key_bytes().as_slice() != self.public_key.as_slice()
+            || vote.validator_address != signer.address()
+        {
+            return Err("signer does not match journal identity".into());
+        }
+        let write = self.db.begin_write().map_err(|e| e.to_string())?;
+        {
+            let mut table = write.open_table(TABLE).map_err(|e| e.to_string())?;
+            let last_proposal: Option<SignedProposal> = table
+                .get("proposal")
+                .map_err(|e| e.to_string())?
+                .map(|value| serde_json::from_slice(value.value()).map_err(|e| e.to_string()))
+                .transpose()?;
+            if last_proposal.is_some_and(|proposal| {
+                (vote.height, vote.round) < (proposal.block.header.height, proposal.round)
+            }) {
+                return Err("vote predates durably signed proposal".into());
+            }
+            let previous: Option<SigningState> = table
+                .get("state")
+                .map_err(|e| e.to_string())?
+                .map(|v| serde_json::from_slice(v.value()).map_err(|e| e.to_string()))
+                .transpose()?;
+            let step = |v: &Vote| {
+                (
+                    v.height,
+                    v.round,
+                    if v.vote_type == VoteType::Prevote {
+                        0u8
+                    } else {
+                        1u8
+                    },
+                )
+            };
+            let mut locked_block = None;
+            let mut locked_round = None;
+            let mut locked_block_data = None;
+            let mut proof_verified = false;
+            if let Some(previous) = previous {
+                if step(&vote) < step(&previous.vote) {
+                    return Err("refusing signing state regression".into());
+                }
+                if step(&vote) == step(&previous.vote) {
+                    if vote.sign_bytes().map_err(|e| e.to_string())?
+                        != previous.vote.sign_bytes().map_err(|e| e.to_string())?
+                    {
+                        return Err(
+                            "refusing conflicting vote at the same height/round/step".into()
+                        );
+                    }
+                    return Ok(previous.vote);
+                }
+                if previous.vote.height == vote.height {
+                    locked_block = previous.locked_block;
+                    locked_round = previous.locked_round;
+                    locked_block_data = previous.locked_block_data;
+                    if locked_block.is_some()
+                        && vote.block_hash.is_some()
+                        && locked_block != vote.block_hash
+                    {
+                        if block.is_none() {
+                            return Err(
+                                "refusing vote conflicting with durable consensus lock".into()
+                            );
+                        }
+                        let locked_round = locked_round.ok_or("durable lock has no round")?;
+                        if vote.round <= locked_round {
+                            return Err("unlock proof must come from a later round".into());
+                        }
+                        let (validators, proof) = unlock_proof
+                            .ok_or("conflicting vote requires a signed prevote quorum proof")?;
+                        let proof_round = proof
+                            .first()
+                            .map(|prevote| prevote.round)
+                            .ok_or("unlock proof must contain a signed prevote quorum")?;
+                        if proof_round <= locked_round || proof_round > vote.round {
+                            return Err("unlock proof must be from a later, reached round".into());
+                        }
+                        let candidate = block.as_ref().expect("checked above");
+                        if candidate.header.validator_set_hash
+                            != validators.commitment().map_err(|e| e.to_string())?
+                        {
+                            return Err(
+                                "unlock proof validator set does not match candidate block".into(),
+                            );
+                        }
+                        sprax_consensus::verify_prevote_quorum(
+                            proof,
+                            validators,
+                            self.genesis,
+                            vote.height,
+                            proof_round,
+                            vote.block_hash.expect("checked as nonnil above"),
+                        )
+                        .map_err(|e| e.to_string())?;
+                        proof_verified = true;
+                    } else if unlock_proof.is_some() {
+                        return Err("unlock proof supplied when no lock conflict exists".into());
+                    }
+                }
+            }
+            if unlock_proof.is_some() && !proof_verified {
+                return Err("unlock proof supplied when no lock conflict exists".into());
+            }
+            // A certified prevote keeps the old durable lock until the replacement
+            // precommit is signed. Restarting after the prevote must restore that lock.
+            if vote.vote_type == VoteType::Precommit && vote.block_hash.is_some() {
+                locked_block = vote.block_hash;
+                locked_round = Some(vote.round);
+                locked_block_data = block;
+            }
+            vote.signature = signer.sign(&vote.sign_bytes().map_err(|e| e.to_string())?);
+            let state = SigningState {
+                vote: vote.clone(),
+                locked_block,
+                locked_round,
+                locked_block_data,
+            };
+            let bytes = serde_json::to_vec(&state).map_err(|e| e.to_string())?;
+            table
+                .insert("state", bytes.as_slice())
+                .map_err(|e| e.to_string())?;
+        }
+        write.commit().map_err(|e| e.to_string())?;
+        Ok(vote)
+    }
+}

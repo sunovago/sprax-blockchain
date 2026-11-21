@@ -12,15 +12,67 @@ pub enum KeyType {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum TxMessage {
     /// Native asset transfer
-    Transfer { to: Address, amount: Amount },
+    Transfer {
+        to: Address,
+        amount: Amount,
+    },
     /// Staking delegation to a validator
-    Delegate { validator: Address, amount: Amount },
+    Delegate {
+        validator: Address,
+        amount: Amount,
+    },
     /// Staking unbonding from a validator
-    Unbond { validator: Address, amount: Amount },
+    Unbond {
+        validator: Address,
+        amount: Amount,
+    },
     /// Smart contract execution payload
-    ContractCall { contract: Address, data: Vec<u8> },
+    ContractCall {
+        contract: Address,
+        data: Vec<u8>,
+        #[serde(default)]
+        funds: Amount,
+    },
+    StoreCode {
+        wasm_bytecode: Vec<u8>,
+    },
+    InstantiateContract {
+        code_id: Hash32,
+        msg: Vec<u8>,
+        funds: Amount,
+        label: String,
+        #[serde(default)]
+        admin: Option<Address>,
+    },
+    /// Authorized smart contract code migration
+    MigrateContract {
+        contract: Address,
+        new_code_id: Hash32,
+        msg: Vec<u8>,
+    },
+    /// Update or clear contract admin address
+    UpdateAdmin {
+        contract: Address,
+        new_admin: Option<Address>,
+    },
+    /// Dynamic validator candidate registration
+    RegisterValidator {
+        consensus_pubkey: Vec<u8>,
+        moniker: String,
+        self_stake: Amount,
+        proof_of_possession: Vec<u8>,
+    },
+    /// Cooldown-based unjail for previously jailed validator
+    Unjail,
+    /// Finalized slashing evidence submission
+    SubmitEquivocationEvidence {
+        evidence: Box<crate::evidence::EquivocationEvidence>,
+    },
     /// Generic extensible payload
-    Generic { type_url: String, payload: Vec<u8> },
+    Generic {
+        type_url: String,
+        payload: Vec<u8>,
+    },
 }
 
 /// Fee and gas specification for transaction execution.
@@ -57,10 +109,9 @@ pub struct TxBody {
 }
 
 impl TxBody {
-    /// Serializes the transaction body to canonical JSON bytes for signing.
+    /// Serializes the transaction body to canonical RFC 8785 JSON bytes for signing.
     pub fn sign_bytes(&self) -> Result<Vec<u8>, TypeError> {
-        serde_json::to_vec(self)
-            .map_err(|e| TypeError::InvalidTransaction(format!("serialization error: {e}")))
+        crate::canonical::to_canonical_json_bytes(self)
     }
 }
 
@@ -103,10 +154,32 @@ impl Transaction {
         })
     }
 
-    /// Serializes the transaction body to canonical JSON bytes for signature creation/verification.
+    /// Serializes the transaction body to canonical RFC 8785 JSON bytes for signature creation/verification.
     pub fn sign_bytes(&self) -> Result<Vec<u8>, TypeError> {
-        serde_json::to_vec(&self.body)
-            .map_err(|e| TypeError::InvalidTransaction(format!("serialization error: {e}")))
+        self.body.sign_bytes()
+    }
+}
+
+/// Typed event emitted during smart contract execution.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ContractEvent {
+    pub contract: Address,
+    pub event_type: String,
+    pub attributes: Vec<(String, String)>,
+}
+
+impl ContractEvent {
+    pub fn new(contract: Address, event_type: impl Into<String>) -> Self {
+        Self {
+            contract,
+            event_type: event_type.into(),
+            attributes: Vec::new(),
+        }
+    }
+
+    pub fn add_attribute(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.attributes.push((key.into(), value.into()));
+        self
     }
 }
 
@@ -119,4 +192,6 @@ pub struct TxReceipt {
     pub gas_used: u64,
     pub error_message: Option<String>,
     pub return_data: Vec<u8>,
+    #[serde(default)]
+    pub events: Vec<ContractEvent>,
 }

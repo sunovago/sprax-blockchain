@@ -182,6 +182,96 @@ export interface AuditLogItem {
   created_at: string;
 }
 
+export interface TapMiningDashboard {
+  total_players: number;
+  total_points_issued: number;
+  total_taps: number;
+  banned_count: number;
+  dau: number;
+  total_sprx_claimed: number;
+  total_claims_count: number;
+  pending_claims_count: number;
+  top_earners: { telegram_id: number; username: string | null; points: number }[];
+}
+
+export interface TapMiningPlayer {
+  telegram_id: number;
+  username: string | null;
+  points: number;
+  energy: number;
+  level: string;
+  is_banned: boolean;
+  taps_total: number;
+  checkin_streak: number;
+  referral_code: string;
+  payout_address: string | null;
+  total_sprx_claimed: number;
+  created_at: string;
+  last_tap_at: string | null;
+}
+
+export interface TapMiningClaim {
+  id: string;
+  tap_miner_id: string;
+  telegram_id: number;
+  telegram_username: string | null;
+  points_spent: number;
+  sprx_amount: number;
+  recipient_address: string;
+  status: 'pending' | 'completed' | 'failed';
+  tx_hash: string | null;
+  error_message: string | null;
+  created_at: string;
+  completed_at: string | null;
+}
+
+export interface FaucetStatus {
+  online: boolean;
+  network?: string;
+  faucet_address?: string;
+  available_balance?: string;
+  total_disbursed?: string;
+  total_claims_count?: number;
+  max_payout_per_request?: number;
+  rate_limit_window_secs?: number;
+  points_per_sprx?: number;
+  min_claim_points?: number;
+  claim_cooldown_seconds?: number;
+}
+
+export interface TapMiningActivityItem {
+  event_type: string;
+  points_delta: number;
+  detail: string | null;
+  created_at: string;
+}
+
+export type TapMiningTaskType = 'manual' | 'telegram_join' | 'milestone';
+
+export interface TapMiningTask {
+  id: string;
+  title: string;
+  description: string | null;
+  task_type: TapMiningTaskType;
+  reward_points: number;
+  action_url: string | null;
+  verify_target: string | null;
+  verify_value: number | null;
+  is_active: boolean;
+  sort_order: number;
+  completions: number;
+  created_at: string;
+}
+
+export interface TapMiningPlayerDetail extends TapMiningPlayer {
+  energy_cap_level: number;
+  regen_speed_level: number;
+  multitap_level: number;
+  referral_earnings: number;
+  referred_by_id: string | null;
+  activity: TapMiningActivityItem[];
+}
+
 export interface SystemAnnouncementItem {
   id: string;
   title: string;

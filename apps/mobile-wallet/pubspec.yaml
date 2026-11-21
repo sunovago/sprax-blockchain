@@ -20,6 +20,7 @@ dependencies:
   mobile_scanner: ^5.1.0
   http: ^1.2.0
   provider: ^6.1.2
+  url_launcher: ^6.3.3
 
 dev_dependencies:
   flutter_test:
@@ -28,3 +29,48 @@ dev_dependencies:
 
 flutter:
   uses-material-design: true
+  assets:
+    - assets/images/onboarding/
+
+  fonts:
+    - family: Inter
+      fonts:
+        - asset: assets/fonts/Inter/Inter-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/Inter/Inter-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/Inter/Inter-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/Inter/Inter-Bold.ttf
+          weight: 700
+        - asset: assets/fonts/Inter/Inter-ExtraBold.ttf
+          weight: 800
+
+    - family: SpaceGrotesk
+      fonts:
+        - asset: assets/fonts/SpaceGrotesk/SpaceGrotesk-Regular.ttf
+          weight: 400
+        - asset: assets/fonts/SpaceGrotesk/SpaceGrotesk-Medium.ttf
+          weight: 500
+        - asset: assets/fonts/SpaceGrotesk/SpaceGrotesk-SemiBold.ttf
+          weight: 600
+        - asset: assets/fonts/SpaceGrotesk/SpaceGrotesk-Bold.ttf
+          weight: 700
+
+    - family: Poppins
+      fonts:
+        - asset: assets/fonts/poppins/poppins-latin-400-normal.ttf
+          weight: 400
+        - asset: assets/fonts/poppins/poppins-latin-400-italic.ttf
+          weight: 400
+          style: italic
+        - asset: assets/fonts/poppins/poppins-latin-500-normal.ttf
+          weight: 500
+        - asset: assets/fonts/poppins/poppins-latin-600-normal.ttf
+          weight: 600
+        - asset: assets/fonts/poppins/poppins-latin-700-normal.ttf
+          weight: 700
+        - asset: assets/fonts/poppins/poppins-latin-800-normal.ttf
+          weight: 800
+        - asset: assets/fonts/poppins/poppins-latin-900-normal.ttf
+          weight: 900

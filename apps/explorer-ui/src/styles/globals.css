@@ -2,6 +2,17 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  .app-container {
+    @apply w-full max-w-screen-2xl mx-auto px-4 sm:px-6 lg:px-8;
+  }
+}
+
+html, body, #root { min-width: 0; width: 100%; }
+main > * { min-width: 0; }
+/* Let cards and scrollable tables shrink inside grid/flex layouts. */
+main .grid > *, main .flex > * { min-width: 0; }
+
 :root {
   /* Dark Theme Default Tokens */
   --bg-primary: #080c14;

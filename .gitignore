@@ -212,3 +212,7 @@ Desktop.ini
 # SPRX generated/test runtime
 **/.sprx_test_runtime/
 **/.sprx_test_runtime/
+
+.tools/
+
+.tools/

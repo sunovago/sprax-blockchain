@@ -82,7 +82,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   };
 
   return (
-    <header className="sticky top-0 z-40 w-full border-b border-border-subtle bg-bg-surface/90 backdrop-blur-md">
+    <header onKeyDown={(event) => { if (event.key === "Escape") { setActiveDropdown(null); setMobileMenuOpen(false); } }} className="sticky top-0 z-40 w-full border-b border-border-subtle bg-bg-surface/90 backdrop-blur-md">
       {/* Testnet Alert Strip */}
       {isTestnet && (
         <div className="bg-amber-500/10 border-b border-amber-500/20 px-4 py-1 text-center text-xs font-semibold text-amber-400 flex items-center justify-center gap-2">
@@ -91,8 +91,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
         </div>
       )}
 
-      <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-        <div className="flex items-center justify-between h-16 gap-3">
+      <div className="app-container">
+        <div className="flex items-center justify-between min-h-16 py-3 gap-2">
           {/* Logo & Wordmark */}
           <div
             className="flex items-center gap-3 cursor-pointer select-none shrink-0"
@@ -105,23 +105,107 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               <span className="absolute -top-1 -right-1 w-2.5 h-2.5 rounded-full bg-emerald-400 ring-2 ring-bg-surface" />
             </div>
 
-            <div>
+            <div className="hidden min-[400px]:block">
               <div className="flex items-center gap-1.5">
                 <span className="text-lg font-extrabold tracking-tight text-text-primary">
                   SPRX
                 </span>
-                <span className="text-[10px] font-bold px-1.5 py-0.2 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase tracking-wide">
+                <span className="hidden sm:inline text-[10px] font-bold px-1.5 py-0.2 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20 uppercase tracking-wide">
                   Protocol
                 </span>
               </div>
-              <p className="text-[10px] text-text-muted hidden sm:block tracking-wide">
+              <p className="text-[10px] text-text-muted hidden xl:block tracking-wide">
                 Scalable Protocol for Real-world X
               </p>
             </div>
           </div>
 
+          {/* Right Utility Controls */}
+          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
+            {/* Search Trigger (⌘K) */}
+            <button
+              onClick={onOpenSearch}
+              className="flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl border border-border-subtle bg-bg-surface hover:bg-bg-surface-elevated hover:border-border-prominent text-text-secondary text-xs transition-all"
+              title="Search Blockchain (Cmd+K / Ctrl+K)"
+            >
+              <Search className="w-3.5 h-3.5 text-text-muted" />
+              <span className="hidden sm:inline">Search</span>
+              <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono bg-bg-surface-elevated border border-border-subtle rounded text-text-muted">
+                ⌘K
+              </kbd>
+            </button>
+
+            {/* Network Selector */}
+            <div className="relative">
+              <select
+                value={network}
+                onChange={(e) => onNetworkChange(e.target.value as Network)}
+                className="appearance-none bg-bg-surface border border-border-subtle text-text-primary text-xs font-semibold rounded-xl pl-2.5 pr-7 py-1.5 focus:outline-none focus:border-cyan-400 cursor-pointer"
+              >
+                <option value="mainnet">Mainnet</option>
+                <option value="testnet">Testnet</option>
+                <option value="local">Local Devnet</option>
+              </select>
+              <ChevronDown className="w-3 h-3 text-text-muted absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+
+            {/* Currency Selector */}
+            <div className="relative hidden md:block">
+              <select
+                value={currency}
+                onChange={(e) => onCurrencyChange(e.target.value as Currency)}
+                className="appearance-none bg-bg-surface border border-border-subtle text-text-primary text-xs font-semibold rounded-xl pl-2 pr-6 py-1.5 focus:outline-none focus:border-cyan-400 cursor-pointer font-mono-num"
+              >
+                <option value="USD">$ USD</option>
+                <option value="INR">₹ INR</option>
+                <option value="EUR">€ EUR</option>
+                <option value="GBP">£ GBP</option>
+                <option value="JPY">¥ JPY</option>
+              </select>
+              <ChevronDown className="w-3 h-3 text-text-muted absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
+            </div>
+
+            {/* Theme Toggle */}
+            <button
+              onClick={onToggleTheme}
+              className="p-2 rounded-xl border border-border-subtle bg-bg-surface hover:bg-bg-surface-elevated text-text-secondary hover:text-text-primary transition-colors"
+              title="Toggle Dark/Light Mode"
+            >
+              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
+            </button>
+
+            {/* Primary Action Button */}
+            {connectedWallet ? (
+              <button
+                onClick={onOpenConnectWallet}
+                className="hidden md:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 text-xs font-bold font-mono-num hover:bg-emerald-500/20 transition-all"
+              >
+                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
+                <span>{connectedWallet.slice(0, 7)}...{connectedWallet.slice(-4)}</span>
+              </button>
+            ) : (
+              <button
+                onClick={onOpenGetStarted || onOpenConnectWallet}
+                className="hidden md:flex px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-bold shadow-md transition-all items-center gap-1.5"
+              >
+                <Sparkles className="w-3.5 h-3.5" />
+                <span>Get Started</span>
+              </button>
+            )}
+
+            {/* Mobile Menu Button */}
+            <button
+              aria-label="Toggle navigation"
+              aria-expanded={mobileMenuOpen}
+              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
+              className="lg:hidden p-2 rounded-xl border border-border-subtle bg-bg-surface text-text-primary"
+            >
+              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
+            </button>
+          </div>
+        </div>
           {/* Desktop Primary Navigation Mega-Menus */}
-          <nav className="hidden lg:flex items-center gap-1 text-xs sm:text-sm font-medium text-text-secondary">
+          <nav className="hidden lg:flex items-center justify-center flex-wrap gap-1 border-t border-border-subtle py-1.5 text-xs sm:text-sm font-medium text-text-secondary">
             {/* 1. Explore */}
             <div
               className="relative"
@@ -129,6 +213,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onMouseLeave={handleMouseLeave}
             >
               <button
+                aria-expanded={activeDropdown === "explore"}
+                onClick={() => setActiveDropdown("explore")}
                 className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${
                   currentRoute.startsWith("/explorer") || currentRoute.startsWith("/block") || currentRoute.startsWith("/tx")
                     ? "text-cyan-400 bg-cyan-500/10 font-bold"
@@ -202,6 +288,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onMouseLeave={handleMouseLeave}
             >
               <button
+                aria-expanded={activeDropdown === "learn"}
+                onClick={() => setActiveDropdown("learn")}
                 className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${
                   currentRoute.startsWith("/learn")
                     ? "text-cyan-400 bg-cyan-500/10 font-bold"
@@ -275,6 +363,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onMouseLeave={handleMouseLeave}
             >
               <button
+                aria-expanded={activeDropdown === "devs"}
+                onClick={() => setActiveDropdown("devs")}
                 className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${
                   currentRoute.startsWith("/developers")
                     ? "text-cyan-400 bg-cyan-500/10 font-bold"
@@ -348,6 +438,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onMouseLeave={handleMouseLeave}
             >
               <button
+                aria-expanded={activeDropdown === "network"}
+                onClick={() => setActiveDropdown("network")}
                 className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${
                   currentRoute.startsWith("/network") || currentRoute.startsWith("/validator") || currentRoute === "/staking"
                     ? "text-cyan-400 bg-cyan-500/10 font-bold"
@@ -401,6 +493,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onMouseLeave={handleMouseLeave}
             >
               <button
+                aria-expanded={activeDropdown === "ecosystem"}
+                onClick={() => setActiveDropdown("ecosystem")}
                 className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${
                   currentRoute.startsWith("/ecosystem") || currentRoute === "/discover" || currentRoute === "/markets"
                     ? "text-cyan-400 bg-cyan-500/10 font-bold"
@@ -454,6 +548,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
               onMouseLeave={handleMouseLeave}
             >
               <button
+                aria-expanded={activeDropdown === "gov"}
+                onClick={() => setActiveDropdown("gov")}
                 className={`flex items-center gap-1 px-3 py-2 rounded-lg transition-colors ${
                   currentRoute.startsWith("/governance") || currentRoute.startsWith("/sips")
                     ? "text-cyan-400 bg-cyan-500/10 font-bold"
@@ -513,94 +609,13 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             </div>
           </nav>
 
-          {/* Right Utility Controls */}
-          <div className="flex items-center gap-2 sm:gap-2.5 shrink-0">
-            {/* Search Trigger (⌘K) */}
-            <button
-              onClick={onOpenSearch}
-              className="flex items-center gap-2 px-2.5 sm:px-3 py-1.5 rounded-xl border border-border-subtle bg-bg-surface hover:bg-bg-surface-elevated hover:border-border-prominent text-text-secondary text-xs transition-all"
-              title="Search Blockchain (Cmd+K / Ctrl+K)"
-            >
-              <Search className="w-3.5 h-3.5 text-text-muted" />
-              <span className="hidden sm:inline">Search</span>
-              <kbd className="hidden sm:inline-block px-1.5 py-0.5 text-[10px] font-mono bg-bg-surface-elevated border border-border-subtle rounded text-text-muted">
-                ⌘K
-              </kbd>
-            </button>
-
-            {/* Network Selector */}
-            <div className="relative">
-              <select
-                value={network}
-                onChange={(e) => onNetworkChange(e.target.value as Network)}
-                className="appearance-none bg-bg-surface border border-border-subtle text-text-primary text-xs font-semibold rounded-xl pl-2.5 pr-7 py-1.5 focus:outline-none focus:border-cyan-400 cursor-pointer"
-              >
-                <option value="mainnet">Mainnet</option>
-                <option value="testnet">Testnet</option>
-                <option value="local">Local Devnet</option>
-              </select>
-              <ChevronDown className="w-3 h-3 text-text-muted absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
-
-            {/* Currency Selector */}
-            <div className="relative hidden sm:block">
-              <select
-                value={currency}
-                onChange={(e) => onCurrencyChange(e.target.value as Currency)}
-                className="appearance-none bg-bg-surface border border-border-subtle text-text-primary text-xs font-semibold rounded-xl pl-2 pr-6 py-1.5 focus:outline-none focus:border-cyan-400 cursor-pointer font-mono-num"
-              >
-                <option value="USD">$ USD</option>
-                <option value="INR">₹ INR</option>
-                <option value="EUR">€ EUR</option>
-                <option value="GBP">£ GBP</option>
-                <option value="JPY">¥ JPY</option>
-              </select>
-              <ChevronDown className="w-3 h-3 text-text-muted absolute right-2 top-1/2 -translate-y-1/2 pointer-events-none" />
-            </div>
-
-            {/* Theme Toggle */}
-            <button
-              onClick={onToggleTheme}
-              className="p-2 rounded-xl border border-border-subtle bg-bg-surface hover:bg-bg-surface-elevated text-text-secondary hover:text-text-primary transition-colors"
-              title="Toggle Dark/Light Mode"
-            >
-              {theme === "dark" ? <Sun className="w-4 h-4" /> : <Moon className="w-4 h-4" />}
-            </button>
-
-            {/* Primary Action Button */}
-            {connectedWallet ? (
-              <button
-                onClick={onOpenConnectWallet}
-                className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-xl border border-emerald-500/40 bg-emerald-500/10 text-emerald-400 text-xs font-bold font-mono-num hover:bg-emerald-500/20 transition-all"
-              >
-                <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-                <span>{connectedWallet.slice(0, 7)}...{connectedWallet.slice(-4)}</span>
-              </button>
-            ) : (
-              <button
-                onClick={onOpenGetStarted || onOpenConnectWallet}
-                className="px-3.5 py-1.5 rounded-xl bg-gradient-to-r from-sky-500 to-indigo-600 hover:from-sky-400 hover:to-indigo-500 text-white text-xs font-bold shadow-md transition-all flex items-center gap-1.5"
-              >
-                <Sparkles className="w-3.5 h-3.5" />
-                <span>Get Started</span>
-              </button>
-            )}
-
-            {/* Mobile Menu Button */}
-            <button
-              onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
-              className="lg:hidden p-2 rounded-xl border border-border-subtle bg-bg-surface text-text-primary"
-            >
-              {mobileMenuOpen ? <X className="w-5 h-5" /> : <Menu className="w-5 h-5" />}
-            </button>
-          </div>
-        </div>
       </div>
 
       {/* Mobile Drawer Menu */}
       {mobileMenuOpen && (
         <div className="lg:hidden border-t border-border-subtle bg-bg-surface p-4 space-y-3 max-h-[80vh] overflow-y-auto animate-fadeIn">
           <div className="grid grid-cols-2 gap-2 text-xs font-bold">
+            <button onClick={() => { setMobileMenuOpen(false); (connectedWallet ? onOpenConnectWallet : onOpenGetStarted || onOpenConnectWallet)?.(); }} className="p-2.5 rounded-xl bg-cyan-500/10 border border-cyan-500/30 text-left text-cyan-400">{connectedWallet ? "Connected Wallet" : "Get Started"}</button>
             <button
               onClick={() => handleNav("/")}
               className="p-2.5 rounded-xl bg-bg-surface-elevated border border-border-subtle text-left text-text-primary"
@@ -655,6 +670,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             >
               Markets
             </button>
+            <button onClick={() => handleNav("/discover")} className="p-2.5 rounded-xl bg-bg-surface-elevated border border-border-subtle text-left text-text-primary">Discover Showcase</button>
             <button
               onClick={() => handleNav("/research")}
               className="p-2.5 rounded-xl bg-bg-surface-elevated border border-border-subtle text-left text-text-primary"

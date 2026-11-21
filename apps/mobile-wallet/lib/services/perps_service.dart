@@ -162,22 +162,6 @@ class PerpsService extends ChangeNotifier {
       tickSize: 0.01,
       isTestnetOnly: true,
     );
-
-    // Initial demo position for SPRX
-    _positions.add(
-      PerpPosition(
-        id: 'pos_1',
-        symbol: 'SPRX/USDT',
-        side: PositionSide.long,
-        size: 2000.0,
-        entryPrice: 1.18,
-        markPrice: 1.25,
-        leverage: 10,
-        margin: 236.0,
-        liquidationPrice: 1.074,
-        openedAt: now.subtract(const Duration(hours: 4)),
-      ),
-    );
   }
 
   void _startLivePriceTicks() {

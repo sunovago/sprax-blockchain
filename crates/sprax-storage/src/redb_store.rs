@@ -15,6 +15,7 @@ const STATE_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("state")
 const CHAIN_META_TABLE: TableDefinition<&[u8], &[u8]> = TableDefinition::new("chain_meta");
 
 const HEIGHT_KEY: &[u8] = b"meta:height";
+const EARLIEST_HEIGHT_KEY: &[u8] = b"meta:earliest_height";
 const BLOCK_PREFIX: &[u8] = b"blk:";
 const BLOCK_HASH_PREFIX: &[u8] = b"blkhash:";
 const TX_PREFIX: &[u8] = b"tx:";
@@ -61,40 +62,45 @@ impl RedbStore {
     }
 
     /// Prunes historical block metadata according to the configured [`crate::PruningStrategy`].
-    /// Returns the number of historical blocks pruned.
     pub fn prune_history(
         &self,
         strategy: crate::PruningStrategy,
         current_height: u64,
-    ) -> Result<usize, StorageError> {
-        let keep_blocks = match strategy {
-            crate::PruningStrategy::Archive => return Ok(0),
-            crate::PruningStrategy::KeepRecent { keep_blocks } => keep_blocks,
-            crate::PruningStrategy::Aggressive { keep_blocks } => keep_blocks,
-        };
-
-        let cutoff = current_height.saturating_sub(keep_blocks);
-        if cutoff == 0 {
-            return Ok(0);
-        }
-
-        let mut pruned = 0;
-        let write_txn = self.db.begin_write().map_err(db_err)?;
-        {
-            let mut table = write_txn.open_table(CHAIN_META_TABLE).map_err(db_err)?;
-            for h in 1..cutoff {
-                let key = u64_key(BLOCK_PREFIX, h);
-                if table.remove(key.as_slice()).map_err(db_err)?.is_some() {
-                    pruned += 1;
-                }
-            }
-        }
-        write_txn.commit().map_err(db_err)?;
-        Ok(pruned)
+    ) -> Result<crate::pruning::PruningStats, StorageError> {
+        <Self as ChainMetaStore>::prune_history(self, strategy, current_height)
     }
 }
 
 impl ReadonlyKVStore for RedbStore {
+    fn scan_range_bounded(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+        max_records: usize,
+        max_bytes: usize,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let read_txn = self.db.begin_read().map_err(db_err)?;
+        let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;
+        let range = match end {
+            Some(end) => table.range(start..end).map_err(db_err)?,
+            None => table.range(start..).map_err(db_err)?,
+        };
+        let mut pairs = Vec::new();
+        let mut bytes = 0usize;
+        for item in range {
+            let (key, value) = item.map_err(db_err)?;
+            bytes = bytes
+                .saturating_add(key.value().len())
+                .saturating_add(value.value().len());
+            if pairs.len() >= max_records || bytes > max_bytes {
+                return Err(StorageError::DatabaseError(
+                    "scan resource limit exceeded".into(),
+                ));
+            }
+            pairs.push((key.value().to_vec(), value.value().to_vec()));
+        }
+        Ok(pairs)
+    }
     fn get(&self, key: &[u8]) -> Result<Option<Vec<u8>>, StorageError> {
         let read_txn = self.db.begin_read().map_err(db_err)?;
         let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;
@@ -102,6 +108,25 @@ impl ReadonlyKVStore for RedbStore {
             .get(key)
             .map_err(db_err)?
             .map(|guard| guard.value().to_vec()))
+    }
+
+    fn scan_range(
+        &self,
+        start: &[u8],
+        end: Option<&[u8]>,
+    ) -> Result<Vec<(Vec<u8>, Vec<u8>)>, StorageError> {
+        let read_txn = self.db.begin_read().map_err(db_err)?;
+        let table = read_txn.open_table(STATE_TABLE).map_err(db_err)?;
+        let mut out = Vec::new();
+        let range = match end {
+            Some(end) => table.range(start..end).map_err(db_err)?,
+            None => table.range(start..).map_err(db_err)?,
+        };
+        for item in range {
+            let (k, v) = item.map_err(db_err)?;
+            out.push((k.value().to_vec(), v.value().to_vec()));
+        }
+        Ok(out)
     }
 }
 
@@ -157,6 +182,39 @@ impl StateCommitment for RedbStore {
 }
 
 impl ChainMetaStore for RedbStore {
+    fn commit_chain_batch(&self, batch: crate::ChainWriteBatch) -> Result<(), StorageError> {
+        let txn = self.db.begin_write().map_err(db_err)?;
+        {
+            let mut state = txn.open_table(STATE_TABLE).map_err(db_err)?;
+            for (k, v) in batch.state.puts {
+                state.insert(k.as_slice(), v.as_slice()).map_err(db_err)?;
+            }
+            for k in batch.state.deletes {
+                state.remove(k.as_slice()).map_err(db_err)?;
+            }
+            let mut meta = txn.open_table(CHAIN_META_TABLE).map_err(db_err)?;
+            for (h, bytes) in batch.blocks {
+                meta.insert(u64_key(BLOCK_PREFIX, h).as_slice(), bytes.as_slice())
+                    .map_err(db_err)?;
+            }
+            for (hash, h) in batch.block_hashes {
+                meta.insert(
+                    hash_key(BLOCK_HASH_PREFIX, hash).as_slice(),
+                    h.to_be_bytes().as_slice(),
+                )
+                .map_err(db_err)?;
+            }
+            for (hash, bytes) in batch.transactions {
+                meta.insert(hash_key(TX_PREFIX, hash).as_slice(), bytes.as_slice())
+                    .map_err(db_err)?;
+            }
+            if let Some(h) = batch.height {
+                meta.insert(HEIGHT_KEY, h.to_be_bytes().as_slice())
+                    .map_err(db_err)?;
+            }
+        }
+        txn.commit().map_err(db_err)
+    }
     fn put_height(&self, height: u64) -> Result<(), StorageError> {
         let write_txn = self.db.begin_write().map_err(db_err)?;
         {
@@ -244,6 +302,81 @@ impl ChainMetaStore for RedbStore {
             .map_err(db_err)?
             .map(|guard| guard.value().to_vec()))
     }
+
+    fn get_earliest_height(&self) -> Result<Option<u64>, StorageError> {
+        let read_txn = self.db.begin_read().map_err(db_err)?;
+        let table = read_txn.open_table(CHAIN_META_TABLE).map_err(db_err)?;
+        Ok(table
+            .get(EARLIEST_HEIGHT_KEY)
+            .map_err(db_err)?
+            .map(|guard| {
+                let mut arr = [0u8; 8];
+                arr.copy_from_slice(guard.value());
+                u64::from_be_bytes(arr)
+            }))
+    }
+
+    fn prune_history(
+        &self,
+        strategy: crate::pruning::PruningStrategy,
+        current_height: u64,
+    ) -> Result<crate::pruning::PruningStats, StorageError> {
+        let cutoff = strategy.cutoff_height(current_height);
+        let start_height = self.get_earliest_height()?.unwrap_or(0);
+        if cutoff == 0 || start_height >= cutoff {
+            return Ok(crate::pruning::PruningStats {
+                blocks_pruned: 0,
+                tx_indices_pruned: 0,
+                earliest_retained_height: start_height,
+            });
+        }
+
+        let mut blocks_pruned = 0;
+        let mut tx_indices_pruned = 0;
+
+        let write_txn = self.db.begin_write().map_err(db_err)?;
+        {
+            let mut table = write_txn.open_table(CHAIN_META_TABLE).map_err(db_err)?;
+            for h in start_height..cutoff {
+                let key = u64_key(BLOCK_PREFIX, h);
+                let block_bytes = table
+                    .remove(key.as_slice())
+                    .map_err(db_err)?
+                    .map(|guard| guard.value().to_vec());
+                if let Some(bytes) = block_bytes {
+                    blocks_pruned += 1;
+                    if let Ok(block) = serde_json::from_slice::<sprax_types::Block>(&bytes) {
+                        if let Ok(block_hash) = sprax_crypto::Hasher::block_hash(&block.header) {
+                            let _ = table
+                                .remove(hash_key(BLOCK_HASH_PREFIX, block_hash).as_slice())
+                                .map_err(db_err)?;
+                        }
+                        for tx in block.body.transactions {
+                            if let Ok(tx_hash) = sprax_crypto::Hasher::tx_hash(&tx) {
+                                if table
+                                    .remove(hash_key(TX_PREFIX, tx_hash).as_slice())
+                                    .map_err(db_err)?
+                                    .is_some()
+                                {
+                                    tx_indices_pruned += 1;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            table
+                .insert(EARLIEST_HEIGHT_KEY, cutoff.to_be_bytes().as_slice())
+                .map_err(db_err)?;
+        }
+        write_txn.commit().map_err(db_err)?;
+
+        Ok(crate::pruning::PruningStats {
+            blocks_pruned,
+            tx_indices_pruned,
+            earliest_retained_height: cutoff,
+        })
+    }
 }
 
 #[cfg(test)]
@@ -275,6 +408,42 @@ mod tests {
         assert_eq!(
             store.get(b"account:charlie").unwrap(),
             Some(b"250".to_vec())
+        );
+    }
+
+    #[test]
+    fn test_redb_store_scan_prefix() {
+        let (store, _dir) = temp_store();
+        store.set(b"c:aaa:k1", b"v1").unwrap();
+        store.set(b"c:aaa:k2", b"v2").unwrap();
+        store.set(b"c:bbb:k1", b"other").unwrap();
+        store.set(b"c:aab:k1", b"boundary").unwrap();
+
+        let scanned = store.scan_prefix(b"c:aaa:").unwrap();
+        assert_eq!(
+            scanned,
+            vec![
+                (b"c:aaa:k1".to_vec(), b"v1".to_vec()),
+                (b"c:aaa:k2".to_vec(), b"v2".to_vec()),
+            ]
+        );
+    }
+
+    #[test]
+    fn test_redb_store_scan_prefix_at_max_byte_boundary() {
+        // Exercises the `prefix_upper_bound` None branch (all-0xff prefix has no upper bound).
+        let (store, _dir) = temp_store();
+        store.set(&[0xff, 0xff], b"a").unwrap();
+        store.set(&[0xff, 0xff, 0x00], b"b").unwrap();
+        store.set(&[0x00], b"unrelated").unwrap();
+
+        let scanned = store.scan_prefix(&[0xff, 0xff]).unwrap();
+        assert_eq!(
+            scanned,
+            vec![
+                (vec![0xff, 0xff], b"a".to_vec()),
+                (vec![0xff, 0xff, 0x00], b"b".to_vec()),
+            ]
         );
     }
 
@@ -347,5 +516,54 @@ mod tests {
             assert_eq!(store.get(b"k").unwrap(), Some(b"v".to_vec()));
             assert_eq!(store.get_height().unwrap(), Some(3));
         }
+    }
+
+    #[test]
+    fn test_redb_store_prune_history() {
+        let (store, _dir) = temp_store();
+
+        for h in 0..=10 {
+            let block = sprax_types::Block {
+                header: sprax_types::BlockHeader {
+                    version: 1,
+                    chain_id: "test".into(),
+                    height: h,
+                    timestamp_unix_secs: 1000 + h,
+                    parent_hash: Hash32::ZERO,
+                    proposer: sprax_types::Address::ZERO,
+                    state_root: Hash32::ZERO,
+                    txs_root: Hash32::ZERO,
+                    receipts_root: Hash32::ZERO,
+                    validator_set_hash: Hash32::ZERO,
+                },
+                body: sprax_types::BlockBody::default(),
+                last_commit: vec![],
+            };
+            let block_bytes = serde_json::to_vec(&block).unwrap();
+            let block_hash = sprax_crypto::Hasher::block_hash(&block.header).unwrap();
+            store.put_block(h, &block_bytes).unwrap();
+            store.put_block_hash_index(block_hash, h).unwrap();
+        }
+        store.put_height(10).unwrap();
+
+        let stats = store
+            .prune_history(crate::PruningStrategy::KeepRecent { keep_blocks: 3 }, 10)
+            .unwrap();
+
+        assert_eq!(stats.blocks_pruned, 7);
+        assert_eq!(stats.earliest_retained_height, 7);
+        assert_eq!(store.get_earliest_height().unwrap(), Some(7));
+
+        for h in 0..7 {
+            assert!(store.get_block(h).unwrap().is_none());
+        }
+        for h in 7..=10 {
+            assert!(store.get_block(h).unwrap().is_some());
+        }
+
+        let stats2 = store
+            .prune_history(crate::PruningStrategy::KeepRecent { keep_blocks: 3 }, 10)
+            .unwrap();
+        assert_eq!(stats2.blocks_pruned, 0);
     }
 }

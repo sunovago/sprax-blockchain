@@ -24,7 +24,7 @@ default-members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.80.0"
+rust-version = "1.88.0"
 authors = ["SPRX Protocol Core Contributors"]
 license = "Apache-2.0 OR MIT"
 repository = "https://github.com/sprax-chain/sprax"
@@ -77,6 +77,10 @@ bech32 = "0.11"
 # RocksDB was evaluated but needs cmake+libclang which aren't available in this environment)
 redb = "2.2"
 
+# Pin the consensus VM version. Cross-platform execution equivalence still requires testing.
+cosmwasm-vm = "=3.0.9"
+cosmwasm-std = "=3.0.9"
+
 # Cryptography & Hashing
 ed25519-dalek = { version = "2.1", features = ["rand_core", "serde"] }
 k256 = { version = "0.13", features = ["ecdsa", "arithmetic", "pkcs8", "serde"] }
@@ -95,6 +99,7 @@ tokio = { version = "1.40", features = ["full"] }
 axum = "0.7"
 tower = "0.4"
 tower-http = { version = "0.5", features = ["cors", "trace"] }
+snow = "0.10.0"
 
 # Logging & Telemetry
 tracing = "0.1"

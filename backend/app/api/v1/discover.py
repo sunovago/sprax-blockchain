@@ -1,15 +1,16 @@
 from fastapi import APIRouter, Depends
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+
 from app.core.dependencies import get_db
-from app.db.models.discover import EcosystemProject
-from app.db.models.indexer import NetworkStat, IndexerState
-from app.db.models.validator import Validator
-from app.modules.markets.service import get_market_service
-from app.core.response import ApiResponse
-from app.core.feature_flags import is_enabled
 from app.core.exceptions import SpraxError
-from app.db.redis import redis_get, redis_set, TTL_DISCOVER
+from app.core.feature_flags import is_enabled
+from app.core.response import ApiResponse
+from app.db.models.discover import EcosystemProject
+from app.db.models.indexer import NetworkStat
+from app.db.models.validator import Validator
+from app.db.redis import TTL_DISCOVER, redis_get, redis_set
+from app.modules.markets.service import get_market_service
 
 router = APIRouter()
 
@@ -27,7 +28,7 @@ async def get_discover(db: AsyncSession = Depends(get_db)):
 
     # Gather data concurrently
     import asyncio
-    gainers, losers, trending, volume_leaders, markets = await asyncio.gather(
+    gather_results: tuple[list[dict] | BaseException, ...] = await asyncio.gather(
         market_svc.get_gainers(5),
         market_svc.get_losers(5),
         market_svc.get_trending(),
@@ -35,6 +36,7 @@ async def get_discover(db: AsyncSession = Depends(get_db)):
         market_svc.get_markets(),
         return_exceptions=True,
     )
+    gainers, losers, trending, volume_leaders, _markets = gather_results
 
     # Projects from DB
     proj_r = await db.execute(

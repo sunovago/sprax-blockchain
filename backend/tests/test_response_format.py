@@ -1,4 +1,3 @@
-import pytest
 from app.core.response import ApiResponse, PaginatedResponse
 
 

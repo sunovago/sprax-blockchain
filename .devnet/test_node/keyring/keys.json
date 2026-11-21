@@ -1,0 +1,23 @@
+{
+  "alice": {
+    "name": "alice",
+    "address": "sprax1sdtp4kee3lv8lrn7mqe3hle0ew29wv7vl380gr",
+    "key_type": "Ed25519",
+    "mnemonic": null,
+    "secret_seed_hex": "0101010101010101010101010101010101010101010101010101010101010101"
+  },
+  "bob": {
+    "name": "bob",
+    "address": "sprax1rmkjnvt9f772j3shqpxhj6wlc3jjk8eswe4gkz",
+    "key_type": "Ed25519",
+    "mnemonic": null,
+    "secret_seed_hex": "0202020202020202020202020202020202020202020202020202020202020202"
+  },
+  "charlie": {
+    "name": "charlie",
+    "address": "sprax1nsuq6mh7ctkrjvsaslgyynl2sw8h225y9apaar",
+    "key_type": "Ed25519",
+    "mnemonic": null,
+    "secret_seed_hex": "0303030303030303030303030303030303030303030303030303030303030303"
+  }
+}

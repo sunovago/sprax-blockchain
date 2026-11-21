@@ -26,6 +26,13 @@ pub struct Keyring {
 
 impl Keyring {
     pub fn open_or_create(dir: &Path) -> Result<Self, NodeError> {
+        Self::open_or_create_with_development_keys(dir, true)
+    }
+
+    pub fn open_or_create_with_development_keys(
+        dir: &Path,
+        seed_development_keys: bool,
+    ) -> Result<Self, NodeError> {
         let keys_file = dir.join("keys.json");
         if keys_file.exists() {
             let content = std::fs::read_to_string(&keys_file)
@@ -42,7 +49,9 @@ impl Keyring {
                 keys: HashMap::new(),
             };
             // Seed with standard deterministic development keys for alice, bob, charlie
-            keyring.init_default_dev_keys()?;
+            if seed_development_keys {
+                keyring.init_default_dev_keys()?;
+            }
             keyring.save()?;
             Ok(keyring)
         }

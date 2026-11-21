@@ -1,6 +1,6 @@
 use sprax_core::{
     executor::TxExecutor,
-    genesis::GenesisConfig,
+    genesis::{ConsensusParams, GenesisConfig},
     ledger::ChainLedger,
     state::{AccountState, StateAccessor},
 };
@@ -202,7 +202,7 @@ fn test_scenario_4_insufficient_balance_rejection() {
     .unwrap();
 
     let executor = TxExecutor::default();
-    let res = executor.execute_transaction(&MemKVStore::new(), &tx, 1, "sprax-devnet-1");
+    let res = executor.execute_transaction(&MemKVStore::new(), &tx, 1, "sprax-devnet-1", 10);
     assert!(
         res.is_err(),
         "tx exceeding sender balance must fail execution"
@@ -337,6 +337,14 @@ fn test_scenario_8_secp256k1_transaction_execution() {
         storage_root: Hash32::ZERO,
     };
     StateAccessor::set_account(&store, &alice_addr, &alice_init).unwrap();
+    StateAccessor::set_supply_state(
+        &store,
+        &sprax_core::state::SupplyState {
+            circulating_supply: alice_init.balance,
+            total_burned: Amount::ZERO,
+        },
+    )
+    .unwrap();
 
     let tx_body = TxBody {
         chain_id: ChainId::new("sprax-devnet-1").unwrap(),
@@ -363,10 +371,309 @@ fn test_scenario_8_secp256k1_transaction_execution() {
 
     let executor = TxExecutor::default();
     let receipt = executor
-        .execute_transaction(&store, &tx, 1, "sprax-devnet-1")
+        .execute_transaction(&store, &tx, 1, "sprax-devnet-1", 10)
         .unwrap();
     assert!(receipt.success);
 
     let bob_state = StateAccessor::get_account(&store, &bob_addr).unwrap();
     assert_eq!(bob_state.balance, Amount::from_sprx_whole(100).unwrap());
+}
+
+#[test]
+fn test_scenario_9_block_reward_minted_to_proposer() {
+    let genesis = GenesisConfig::default_development();
+    let expected_reward = genesis.consensus_params.block_reward_at_height(1);
+    let genesis_supply_before: Amount = genesis.accounts.iter().fold(Amount::ZERO, |acc, a| {
+        acc.checked_add(a.initial_balance).unwrap()
+    });
+
+    let mut ledger = ChainLedger::init_from_genesis(genesis).unwrap();
+    let proposer = Address::new([9u8; 20]);
+    assert_eq!(ledger.get_account(&proposer).unwrap().balance, Amount::ZERO);
+
+    ledger.mine_block(proposer).unwrap();
+
+    assert_eq!(
+        ledger.get_account(&proposer).unwrap().balance,
+        expected_reward
+    );
+    let supply = ledger.get_supply_state().unwrap();
+    assert_eq!(
+        supply.circulating_supply,
+        genesis_supply_before.checked_add(expected_reward).unwrap()
+    );
+}
+
+#[test]
+fn test_scenario_10_block_reward_halves_and_caps_at_max_supply() {
+    let mut genesis = GenesisConfig::default_development();
+    // Tiny cap, only just above genesis supply, so a couple of blocks exhaust it.
+    let genesis_supply: Amount = genesis.accounts.iter().fold(Amount::ZERO, |acc, a| {
+        acc.checked_add(a.initial_balance).unwrap()
+    });
+    genesis.consensus_params = ConsensusParams {
+        initial_block_reward: Amount::from_sprx_whole(10).unwrap(),
+        halving_interval_blocks: 1_000_000, // no halving within this test's height range
+        max_supply: genesis_supply
+            .checked_add(Amount::from_sprx_whole(15).unwrap())
+            .unwrap(),
+        ..genesis.consensus_params
+    };
+
+    let mut ledger = ChainLedger::init_from_genesis(genesis).unwrap();
+    let proposer = Address::new([9u8; 20]);
+
+    // Block 1: full 10 SPRX reward, headroom (15) easily covers it.
+    ledger.mine_block(proposer).unwrap();
+    assert_eq!(
+        ledger.get_account(&proposer).unwrap().balance,
+        Amount::from_sprx_whole(10).unwrap()
+    );
+
+    // Block 2: only 5 SPRX headroom left, so the 10 SPRX reward is clamped to 5.
+    ledger.mine_block(proposer).unwrap();
+    assert_eq!(
+        ledger.get_account(&proposer).unwrap().balance,
+        Amount::from_sprx_whole(15).unwrap()
+    );
+    let supply = ledger.get_supply_state().unwrap();
+    assert_eq!(
+        supply.circulating_supply,
+        genesis_supply
+            .checked_add(Amount::from_sprx_whole(15).unwrap())
+            .unwrap()
+    );
+
+    // Block 3: cap already reached, no further minting.
+    ledger.mine_block(proposer).unwrap();
+    assert_eq!(
+        ledger.get_account(&proposer).unwrap().balance,
+        Amount::from_sprx_whole(15).unwrap()
+    );
+}
+
+#[test]
+fn test_scenario_11_apply_block_matches_mine_block_reward() {
+    let genesis = GenesisConfig::default_development();
+    let mut proposer_ledger = ChainLedger::init_from_genesis(genesis.clone()).unwrap();
+    let mut peer_ledger = ChainLedger::init_from_genesis(genesis).unwrap();
+    let proposer = Address::new([9u8; 20]);
+
+    let block = proposer_ledger.mine_block(proposer).unwrap();
+    peer_ledger.apply_block(block).unwrap();
+
+    assert_eq!(
+        proposer_ledger.get_account(&proposer).unwrap().balance,
+        peer_ledger.get_account(&proposer).unwrap().balance
+    );
+    assert_eq!(
+        proposer_ledger.get_supply_state().unwrap(),
+        peer_ledger.get_supply_state().unwrap()
+    );
+}
+
+#[test]
+fn test_scenario_12_delegate_transaction_moves_real_balance() {
+    let alice_kp = Ed25519Keypair::generate();
+    let alice_addr = alice_kp.address();
+    let validator_addr = Address::new([7u8; 20]);
+
+    let mut genesis = GenesisConfig::default_development();
+    genesis.accounts[0].address = alice_addr;
+    genesis.accounts[0].initial_balance = Amount::from_sprx_whole(1_000).unwrap();
+
+    let mut ledger = ChainLedger::init_from_genesis(genesis).unwrap();
+
+    let delegate_amount = Amount::from_sprx_whole(400).unwrap();
+    let fee = TxFee::default();
+
+    let tx_body = TxBody {
+        chain_id: ChainId::new("sprax-devnet-1").unwrap(),
+        sender: alice_addr,
+        nonce: 0,
+        messages: vec![TxMessage::Delegate {
+            validator: validator_addr,
+            amount: delegate_amount,
+        }],
+        fee: fee.clone(),
+        memo: "delegate".into(),
+        timeout_height: 10,
+    };
+    let sign_bytes = tx_body.sign_bytes().unwrap();
+    let sig = alice_kp.sign(&sign_bytes);
+    let tx = Transaction::new(
+        tx_body,
+        KeyType::Ed25519,
+        alice_kp.public_key_bytes().to_vec(),
+        sig,
+    )
+    .unwrap();
+
+    ledger.submit_transaction(tx).unwrap();
+    ledger.mine_block(Address::new([9u8; 20])).unwrap();
+
+    let alice_after = ledger.get_account(&alice_addr).unwrap();
+    let expected_bal = Amount::from_sprx_whole(1_000)
+        .unwrap()
+        .checked_sub(delegate_amount)
+        .unwrap()
+        .checked_sub(fee.amount)
+        .unwrap();
+    assert_eq!(alice_after.balance, expected_bal);
+
+    let validator_stake = ledger.get_validator_stake(&validator_addr).unwrap();
+    assert_eq!(validator_stake.tokens, delegate_amount);
+
+    let delegation = ledger.get_delegation(&alice_addr, &validator_addr).unwrap();
+    assert_eq!(delegation.balance, delegate_amount);
+    assert_eq!(delegation.shares, delegate_amount);
+}
+
+#[test]
+fn test_scenario_13_unbond_then_maturity_sweep_returns_funds() {
+    let alice_kp = Ed25519Keypair::generate();
+    let alice_addr = alice_kp.address();
+    let validator_addr = Address::new([7u8; 20]);
+
+    let mut genesis = GenesisConfig::default_development();
+    genesis.accounts[0].address = alice_addr;
+    genesis.accounts[0].initial_balance = Amount::from_sprx_whole(1_000).unwrap();
+    genesis.consensus_params.unbonding_period_blocks = 2;
+
+    let mut ledger = ChainLedger::init_from_genesis(genesis).unwrap();
+    let proposer = Address::new([9u8; 20]);
+    let delegate_amount = Amount::from_sprx_whole(400).unwrap();
+
+    // Height 1: delegate
+    let delegate_body = TxBody {
+        chain_id: ChainId::new("sprax-devnet-1").unwrap(),
+        sender: alice_addr,
+        nonce: 0,
+        messages: vec![TxMessage::Delegate {
+            validator: validator_addr,
+            amount: delegate_amount,
+        }],
+        fee: TxFee::default(),
+        memo: "delegate".into(),
+        timeout_height: 50,
+    };
+    let sig = alice_kp.sign(&delegate_body.sign_bytes().unwrap());
+    let tx = Transaction::new(
+        delegate_body,
+        KeyType::Ed25519,
+        alice_kp.public_key_bytes().to_vec(),
+        sig,
+    )
+    .unwrap();
+    ledger.submit_transaction(tx).unwrap();
+    ledger.mine_block(proposer).unwrap();
+
+    // Height 2: unbond the full delegated amount (completion_height = 2 + 2 = 4)
+    let unbond_body = TxBody {
+        chain_id: ChainId::new("sprax-devnet-1").unwrap(),
+        sender: alice_addr,
+        nonce: 1,
+        messages: vec![TxMessage::Unbond {
+            validator: validator_addr,
+            amount: delegate_amount,
+        }],
+        fee: TxFee::default(),
+        memo: "unbond".into(),
+        timeout_height: 50,
+    };
+    let sig = alice_kp.sign(&unbond_body.sign_bytes().unwrap());
+    let tx = Transaction::new(
+        unbond_body,
+        KeyType::Ed25519,
+        alice_kp.public_key_bytes().to_vec(),
+        sig,
+    )
+    .unwrap();
+    ledger.submit_transaction(tx).unwrap();
+    ledger.mine_block(proposer).unwrap();
+
+    let delegation_after_unbond = ledger.get_delegation(&alice_addr, &validator_addr).unwrap();
+    assert_eq!(delegation_after_unbond.balance, Amount::ZERO);
+    let stake_after_unbond = ledger.get_validator_stake(&validator_addr).unwrap();
+    assert_eq!(stake_after_unbond.tokens, Amount::ZERO);
+
+    let balance_before_maturity = ledger.get_account(&alice_addr).unwrap().balance;
+
+    // Height 3: still before completion_height=4, funds must not have returned yet
+    ledger.mine_block(proposer).unwrap();
+    assert_eq!(
+        ledger.get_account(&alice_addr).unwrap().balance,
+        balance_before_maturity,
+        "funds must not return before the unbonding completion height"
+    );
+
+    // Height 4: completion_height reached, the maturity sweep must credit funds back
+    ledger.mine_block(proposer).unwrap();
+    assert_eq!(
+        ledger.get_account(&alice_addr).unwrap().balance,
+        balance_before_maturity
+            .checked_add(delegate_amount)
+            .unwrap(),
+        "unbonded funds must return to the delegator's balance at the completion height"
+    );
+}
+
+#[test]
+fn test_scenario_14_apply_block_matches_mine_block_for_staking() {
+    let alice_kp = Ed25519Keypair::generate();
+    let alice_addr = alice_kp.address();
+    let validator_addr = Address::new([7u8; 20]);
+
+    let mut genesis = GenesisConfig::default_development();
+    genesis.accounts[0].address = alice_addr;
+    genesis.accounts[0].initial_balance = Amount::from_sprx_whole(1_000).unwrap();
+
+    let mut proposer_ledger = ChainLedger::init_from_genesis(genesis.clone()).unwrap();
+    let mut peer_ledger = ChainLedger::init_from_genesis(genesis).unwrap();
+    let proposer = Address::new([9u8; 20]);
+
+    let delegate_amount = Amount::from_sprx_whole(250).unwrap();
+    let tx_body = TxBody {
+        chain_id: ChainId::new("sprax-devnet-1").unwrap(),
+        sender: alice_addr,
+        nonce: 0,
+        messages: vec![TxMessage::Delegate {
+            validator: validator_addr,
+            amount: delegate_amount,
+        }],
+        fee: TxFee::default(),
+        memo: "delegate".into(),
+        timeout_height: 10,
+    };
+    let sig = alice_kp.sign(&tx_body.sign_bytes().unwrap());
+    let tx = Transaction::new(
+        tx_body,
+        KeyType::Ed25519,
+        alice_kp.public_key_bytes().to_vec(),
+        sig,
+    )
+    .unwrap();
+
+    proposer_ledger.submit_transaction(tx).unwrap();
+    let block = proposer_ledger.mine_block(proposer).unwrap();
+    peer_ledger.apply_block(block).unwrap();
+
+    assert_eq!(
+        proposer_ledger
+            .get_validator_stake(&validator_addr)
+            .unwrap(),
+        peer_ledger.get_validator_stake(&validator_addr).unwrap()
+    );
+    assert_eq!(
+        proposer_ledger
+            .get_delegation(&alice_addr, &validator_addr)
+            .unwrap(),
+        peer_ledger
+            .get_delegation(&alice_addr, &validator_addr)
+            .unwrap()
+    );
+    assert_eq!(
+        proposer_ledger.get_account(&alice_addr).unwrap(),
+        peer_ledger.get_account(&alice_addr).unwrap()
+    );
 }

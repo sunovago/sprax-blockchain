@@ -14,9 +14,13 @@ workspace = true
 sprax-types.workspace = true
 sprax-crypto.workspace = true
 sprax-storage.workspace = true
+sprax-wasm.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+sprax-storage = { workspace = true, features = ["redb-store"] }
+tempfile.workspace = true
+hex.workspace = true

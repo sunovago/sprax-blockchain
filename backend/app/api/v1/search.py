@@ -1,15 +1,19 @@
-from fastapi import APIRouter, Query
+from fastapi import APIRouter, Depends, Query
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, or_
-from fastapi import Depends
+
 from app.core.dependencies import get_db
-from app.db.models.blockchain import Block, Transaction, Address
-from app.db.models.validator import Validator
-from app.modules.markets.service import get_market_service
-from app.modules.blockchain.address import (
-    is_valid_address, is_valid_tx_hash, is_block_height, is_valid_valoper
-)
+from app.core.logging import logger
 from app.core.response import ApiResponse
+from app.db.models.blockchain import Address, Block, Transaction
+from app.db.models.validator import Validator
+from app.modules.blockchain.address import (
+    is_block_height,
+    is_valid_address,
+    is_valid_tx_hash,
+    is_valid_valoper,
+)
+from app.modules.markets.service import get_market_service
 
 router = APIRouter()
 
@@ -24,29 +28,29 @@ async def search(
 
     # 1. Block height
     if is_block_height(q):
-        r = await db.execute(select(Block).where(Block.height == int(q)))
-        block = r.scalar_one_or_none()
+        height_r = await db.execute(select(Block).where(Block.height == int(q)))
+        block = height_r.scalar_one_or_none()
         if block:
             results.append({"type": "block", "data": {"height": block.height, "hash": block.hash}})
 
     # 2. Transaction hash
     if is_valid_tx_hash(q):
-        r = await db.execute(select(Transaction).where(Transaction.hash == q))
-        tx = r.scalar_one_or_none()
+        tx_r = await db.execute(select(Transaction).where(Transaction.hash == q))
+        tx = tx_r.scalar_one_or_none()
         if tx:
             results.append({"type": "transaction", "data": {"hash": tx.hash, "status": tx.status}})
 
     # 3. Block hash (if starts with 0x and 66 chars or 64 hex)
     if not results and (q.startswith("0x") or (len(q) == 64 and all(c in "0123456789abcdefABCDEF" for c in q))):
-        r = await db.execute(select(Block).where(Block.hash == q))
-        block = r.scalar_one_or_none()
+        hash_r = await db.execute(select(Block).where(Block.hash == q))
+        block = hash_r.scalar_one_or_none()
         if block:
             results.append({"type": "block", "data": {"height": block.height, "hash": block.hash}})
 
     # 4. Address
     if is_valid_address(q):
-        r = await db.execute(select(Address).where(Address.address == q))
-        addr = r.scalar_one_or_none()
+        addr_r = await db.execute(select(Address).where(Address.address == q))
+        addr = addr_r.scalar_one_or_none()
         if addr:
             results.append({"type": "address", "data": {"address": addr.address, "tx_count": addr.tx_count}})
         else:
@@ -54,17 +58,17 @@ async def search(
 
     # 5. Validator operator address
     if is_valid_valoper(q):
-        r = await db.execute(select(Validator).where(Validator.operator_address == q))
-        val = r.scalar_one_or_none()
+        valoper_r = await db.execute(select(Validator).where(Validator.operator_address == q))
+        val = valoper_r.scalar_one_or_none()
         if val:
             results.append({"type": "validator", "data": {"operator_address": val.operator_address, "moniker": val.moniker}})
 
     # 6. Validator moniker search
     if not results:
-        r = await db.execute(
+        moniker_r = await db.execute(
             select(Validator).where(Validator.moniker.ilike(f"%{q}%")).limit(5)
         )
-        vals = r.scalars().all()
+        vals = moniker_r.scalars().all()
         for val in vals:
             results.append({"type": "validator", "data": {"operator_address": val.operator_address, "moniker": val.moniker}})
 
@@ -77,7 +81,7 @@ async def search(
                 if q.upper() in (m.get("symbol", "").upper(), m.get("name", "").upper()):
                     results.append({"type": "asset", "data": m})
                     break
-        except Exception:
-            pass
+        except Exception as e:
+            logger.warning("search_market_lookup_failed", query=q, error=str(e))
 
     return ApiResponse.ok({"query": q, "results": results})

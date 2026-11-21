@@ -28,3 +28,5 @@ tower-http.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true
+ureq = { version = "2.12", features = ["json"] }
+

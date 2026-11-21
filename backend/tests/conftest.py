@@ -1,13 +1,16 @@
 import asyncio
+
 import pytest
 import pytest_asyncio
-from httpx import AsyncClient, ASGITransport
-from sqlalchemy.ext.asyncio import create_async_engine, async_sessionmaker
-from app.main import app
-from app.db.base import Base
-from app.core.dependencies import get_db
+from httpx import ASGITransport, AsyncClient
+from sqlalchemy.dialects.postgresql import JSONB, UUID
+from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.ext.compiler import compiles
-from sqlalchemy.dialects.postgresql import UUID, JSONB
+
+from app.core.dependencies import get_db
+from app.db.base import Base
+from app.main import app
+
 
 @compiles(UUID, "sqlite")
 def compile_uuid_sqlite(type_, compiler, **kw):

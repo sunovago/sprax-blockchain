@@ -1,0 +1,9 @@
+{
+  "moniker": "val-infralabs",
+  "operatorAddress": "sprax1a2uejxwmujvtz3kqrwnlcchd6cv8z2rke2r638",
+  "valoperAddress": "spraxvaloper1a2uejxwmujvtz3kqrwnlcchd6cv8z2rknlhhjv",
+  "consensusPubkey": "0xa447ddfd0f109c4e2b0424f0a37209f5dc5f970ccd948d79d85341ad0d555652",
+  "selfStakeSprx": "100000",
+  "commissionRate": "0.05",
+  "generatedAt": "GenesisCeremony-Phase1"
+}

@@ -1,14 +1,16 @@
-from fastapi import APIRouter, Depends, HTTPException
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
-from pydantic import BaseModel
-from app.core.dependencies import get_db, get_current_user
-from app.db.models.perp import PerpMarket, Order, Position, Trade, FundingEvent
-from app.core.response import ApiResponse
-from app.core.feature_flags import is_enabled
-from app.core.exceptions import SpraxError, PERPS_DISABLED
 import uuid
 from decimal import Decimal
+
+from fastapi import APIRouter, Depends, HTTPException
+from pydantic import BaseModel
+from sqlalchemy import desc, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.dependencies import get_current_user, get_db
+from app.core.exceptions import PERPS_DISABLED, SpraxError
+from app.core.feature_flags import is_enabled
+from app.core.response import ApiResponse
+from app.db.models.perp import FundingEvent, Order, PerpMarket, Position, Trade
 
 router = APIRouter()
 

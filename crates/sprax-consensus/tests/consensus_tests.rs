@@ -27,7 +27,7 @@ fn test_scenario_1_honest_validators_bft_round_convergence() {
     engine.start_height(1);
     assert_eq!(engine.current_step(), RoundStep::Propose);
 
-    let proposer = engine.select_proposer();
+    let proposer = engine.select_proposer(Hash32::ZERO, 1, 0).unwrap();
     let proposal_hash = Hash32::new([0xbb; 32]);
     engine
         .propose_block(proposal_hash, proposer.address)
@@ -36,6 +36,7 @@ fn test_scenario_1_honest_validators_bft_round_convergence() {
 
     // Honest validators 1 & 2 prevote (40 + 35 = 75 >= 67 quorum)
     let pv1 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Prevote,
         1,
         0,
@@ -44,6 +45,7 @@ fn test_scenario_1_honest_validators_bft_round_convergence() {
         kp1.sign(proposal_hash.as_bytes()),
     );
     let pv2 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Prevote,
         1,
         0,
@@ -58,6 +60,7 @@ fn test_scenario_1_honest_validators_bft_round_convergence() {
 
     // Honest validators 1 & 2 precommit
     let pc1 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Precommit,
         1,
         0,
@@ -66,6 +69,7 @@ fn test_scenario_1_honest_validators_bft_round_convergence() {
         kp1.sign(proposal_hash.as_bytes()),
     );
     let pc2 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Precommit,
         1,
         0,
@@ -104,6 +108,7 @@ fn test_scenario_2_offline_validators_below_and_above_threshold() {
     // CASE A: Validator 3 (20% power < 33.3%) is offline.
     // Validators 1 & 2 (50 + 30 = 80% power >= 67% quorum) can finalize!
     let pv1 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Prevote,
         1,
         0,
@@ -112,6 +117,7 @@ fn test_scenario_2_offline_validators_below_and_above_threshold() {
         kp1.sign(proposal_hash.as_bytes()),
     );
     let pv2 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Prevote,
         1,
         0,
@@ -123,6 +129,7 @@ fn test_scenario_2_offline_validators_below_and_above_threshold() {
     engine.receive_prevote(pv2).unwrap();
 
     let pc1 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Precommit,
         1,
         0,
@@ -131,6 +138,7 @@ fn test_scenario_2_offline_validators_below_and_above_threshold() {
         kp1.sign(proposal_hash.as_bytes()),
     );
     let pc2 = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Precommit,
         1,
         0,
@@ -152,6 +160,7 @@ fn test_scenario_2_offline_validators_below_and_above_threshold() {
     engine.propose_block(proposal2, v2.address).unwrap();
 
     let pv2_b = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Prevote,
         2,
         0,
@@ -160,6 +169,7 @@ fn test_scenario_2_offline_validators_below_and_above_threshold() {
         kp2.sign(proposal2.as_bytes()),
     );
     let pv3_b = Vote::new(
+        sprax_types::Hash32::ZERO,
         VoteType::Prevote,
         2,
         0,
@@ -200,6 +210,7 @@ fn test_scenario_3_network_partition_majority_vs_minority() {
 
     engine_a
         .receive_prevote(Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             1,
             0,
@@ -210,6 +221,7 @@ fn test_scenario_3_network_partition_majority_vs_minority() {
         .unwrap();
     engine_a
         .receive_prevote(Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             1,
             0,
@@ -221,6 +233,7 @@ fn test_scenario_3_network_partition_majority_vs_minority() {
 
     engine_a
         .receive_precommit(Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             1,
             0,
@@ -231,6 +244,7 @@ fn test_scenario_3_network_partition_majority_vs_minority() {
         .unwrap();
     let res_a = engine_a
         .receive_precommit(Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             1,
             0,
@@ -252,6 +266,7 @@ fn test_scenario_3_network_partition_majority_vs_minority() {
 
     engine_b
         .receive_prevote(Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             1,
             0,
@@ -262,6 +277,7 @@ fn test_scenario_3_network_partition_majority_vs_minority() {
         .unwrap();
     let res_pv_b = engine_b
         .receive_prevote(Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             1,
             0,
@@ -422,6 +438,7 @@ fn test_scenario_7_equivocation_double_signing_tombstone() {
         height: 10,
         round: 0,
         vote_a: Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             10,
             0,
@@ -430,6 +447,7 @@ fn test_scenario_7_equivocation_double_signing_tombstone() {
             vec![1; 64],
         ),
         vote_b: Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             10,
             0,

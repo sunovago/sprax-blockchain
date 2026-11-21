@@ -1,6 +1,5 @@
 from app.core.config import settings
 
-
 FLAGS: dict[str, bool] = {
     "perps_enabled": settings.feature_perps_enabled,
     "mainnet_enabled": settings.feature_mainnet_enabled,

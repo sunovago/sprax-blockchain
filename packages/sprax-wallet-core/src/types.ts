@@ -128,3 +128,55 @@ export interface EncryptedVault {
   kdfIterations: number;
   accounts: Account[];
 }
+
+/**
+ * CosmWasm CW20 Fungible Token metadata descriptor.
+ */
+export interface CW20TokenInfo {
+  address: string;
+  name: string;
+  symbol: string;
+  decimals: number;
+  totalSupply: string;
+}
+
+/**
+ * User account balance of a CW20 token.
+ */
+export interface CW20Balance {
+  tokenAddress: string;
+  symbol: string;
+  name: string;
+  decimals: number;
+  balance: string;
+  balanceRaw: string;
+}
+
+/**
+ * CosmWasm Smart Contract execution request.
+ */
+export interface ContractCallRequest {
+  fromAddress: string;
+  contractAddress: string;
+  msg: Record<string, any> | string;
+  fundsAtto?: string;
+  nonce: number;
+  fee?: TxFee;
+  memo?: string;
+  timeoutHeight?: number;
+}
+
+/**
+ * CW20 Token transfer request.
+ */
+export interface CW20TransferRequest {
+  fromAddress: string;
+  tokenAddress: string;
+  recipient: string;
+  amount: string;
+  decimals: number;
+  nonce: number;
+  fee?: TxFee;
+  memo?: string;
+  timeoutHeight?: number;
+}

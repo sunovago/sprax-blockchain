@@ -1,11 +1,13 @@
+import uuid
+
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from app.core.dependencies import get_db, get_current_user
-from app.db.models.watchlist import Watchlist, WatchlistAsset
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.dependencies import get_current_user, get_db
 from app.core.response import ApiResponse
-import uuid
+from app.db.models.watchlist import Watchlist, WatchlistAsset
 
 router = APIRouter()
 

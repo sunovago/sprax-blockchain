@@ -124,7 +124,8 @@ export const App: React.FC = () => {
     setNetwork(n);
     apiService.setNetwork(n);
     localStorage.setItem("sprx_network", n);
-    loadAllData();
+    setBlocksPage(1);
+    setTxsPage(1);
   };
 
   const toggleTheme = () => {
@@ -133,6 +134,7 @@ export const App: React.FC = () => {
 
   // Load all initial telemetry data
   const loadAllData = useCallback(async () => {
+    apiService.setNetwork(network);
     try {
       const [st, blkRes, txRes, valList, ctList] = await Promise.all([
         apiService.getStats(),
@@ -150,7 +152,7 @@ export const App: React.FC = () => {
     } catch (err) {
       console.error("Failed to load blockchain data:", err);
     }
-  }, [blocksPage, txsPage]);
+  }, [blocksPage, txsPage, network]);
 
   useEffect(() => {
     loadAllData();
@@ -163,8 +165,8 @@ export const App: React.FC = () => {
       try {
         const [st, blkRes, txRes] = await Promise.all([
           apiService.getStats(),
-          apiService.getBlocks(pageSize, 0),
-          apiService.getTransactions(pageSize, 0),
+          apiService.getBlocks(pageSize, (blocksPage - 1) * pageSize),
+          apiService.getTransactions(pageSize, (txsPage - 1) * pageSize),
         ]);
         setStats(st);
         setBlocks(blkRes.items);
@@ -175,13 +177,52 @@ export const App: React.FC = () => {
     }, 4000);
 
     return () => clearInterval(interval);
-  }, [isPolling]);
+  }, [isPolling, blocksPage, txsPage, network]);
 
   // Router navigation helper
   const navigateTo = (route: string) => {
+    if (window.location.pathname !== route) window.history.pushState(null, "", route);
     setCurrentRoute(route);
     window.scrollTo({ top: 0, behavior: "smooth" });
   };
+
+  useEffect(() => {
+    const restoreRoute = () => setCurrentRoute(window.location.pathname || "/");
+    window.addEventListener("popstate", restoreRoute);
+    return () => window.removeEventListener("popstate", restoreRoute);
+  }, []);
+
+  const [routeLoading, setRouteLoading] = useState(false);
+  const [routeMissing, setRouteMissing] = useState(false);
+
+  // Resolve detail URLs on refresh and browser Back/Forward as well as clicks.
+  useEffect(() => {
+    let cancelled = false;
+    const loadRoute = async () => {
+      const [, kind, id] = currentRoute.split("/");
+      setRouteMissing(false);
+      if (!id || !["block", "tx", "address", "contract", "validator"].includes(kind)) { setRouteLoading(false); return; }
+      setRouteLoading(true);
+      if (kind === "block") {
+        const block = await apiService.getBlock(id);
+        if (!cancelled) { setCurrentBlock(block); setRouteMissing(!block); }
+      } else if (kind === "tx") {
+        const tx = await apiService.getTransaction(id);
+        if (!cancelled) { setCurrentTx(tx); setRouteMissing(!tx); }
+      } else if (kind === "address") {
+        const [account, txs] = await Promise.all([apiService.getAddress(id), apiService.getAddressTransactions(id, 20, 0)]);
+        if (!cancelled) { setCurrentAccount(account); setCurrentAccountTxs(txs.items); setRouteMissing(!account); }
+      } else if (kind === "contract") {
+        const contract = await apiService.getContract(id);
+        if (!cancelled) { setCurrentContract(contract); setRouteMissing(!contract); }
+      } else if (kind === "validator") {
+        const list = await apiService.getValidators();
+        if (!cancelled) { const validator = list.find(v => v.operator_address === id) ?? null; setCurrentValidator(validator); setRouteMissing(!validator); }
+      }
+    };
+    void loadRoute().catch(() => { if (!cancelled) setRouteMissing(true); }).finally(() => { if (!cancelled) setRouteLoading(false); });
+    return () => { cancelled = true; };
+  }, [currentRoute, network]);
 
   // Select Block
   const handleSelectBlock = async (heightOrHash: string | number) => {
@@ -189,7 +230,7 @@ export const App: React.FC = () => {
     if (block) {
       setCurrentBlock(block);
       const txs = transactions.filter((t) => t.block_height === block.height);
-      setCurrentBlockTxs(txs.length > 0 ? txs : transactions.slice(0, 3));
+      setCurrentBlockTxs(txs);
       navigateTo(`/block/${block.height}`);
     } else {
       navigateTo("/404");
@@ -257,7 +298,7 @@ export const App: React.FC = () => {
     if (result.type === "Block") {
       setCurrentBlock(result.data);
       const txs = transactions.filter((t) => t.block_height === result.data.height);
-      setCurrentBlockTxs(txs.length > 0 ? txs : transactions.slice(0, 3));
+      setCurrentBlockTxs(txs);
       navigateTo(`/block/${result.data.height}`);
     } else if (result.type === "Transaction") {
       setCurrentTx(result.data);
@@ -311,12 +352,14 @@ export const App: React.FC = () => {
           <div className="bg-amber-500/10 border-b border-amber-500/30 px-4 py-2 text-center text-xs sm:text-sm text-amber-400 font-medium flex items-center justify-center gap-2">
             <span className="inline-block w-2 h-2 rounded-full bg-amber-400 animate-pulse" />
             <span>
-              Connected to {network.toUpperCase()} Simulated Genesis Node. All telemetry and smart contracts active.
+              Showing sample {network.toUpperCase()} explorer data. Live chain connection is unavailable.
             </span>
           </div>
         )}
 
-        <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6 sm:py-8">
+        <main className="app-container min-w-0 flex-1 py-6 sm:py-8">
+          {routeLoading && <p role="status" className="py-8 text-text-secondary">Loading record...</p>}
+          {routeMissing && <NotFoundPage onGoHome={() => navigateTo("/")} onOpenSearch={() => setSearchModalOpen(true)} />}
           {/* 1. Core Homepage */}
           {currentRoute === "/" && stats && (
             <HomePage
@@ -355,7 +398,7 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentRoute.startsWith("/block/") && currentBlock && (
+          {currentRoute.startsWith("/block/") && !routeLoading && !routeMissing && currentBlock && (
             <BlockDetailsPage
               block={currentBlock}
               txs={currentBlockTxs}
@@ -379,7 +422,7 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentRoute.startsWith("/tx/") && currentTx && (
+          {currentRoute.startsWith("/tx/") && !routeLoading && !routeMissing && currentTx && (
             <TxDetailsPage
               tx={currentTx}
               currency={currency}
@@ -389,7 +432,7 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentRoute.startsWith("/address/") && currentAccount && (
+          {currentRoute.startsWith("/address/") && !routeLoading && !routeMissing && currentAccount && (
             <AddressPage
               account={currentAccount}
               txs={currentAccountTxs}
@@ -404,6 +447,7 @@ export const App: React.FC = () => {
           {/* 3. Learn Hub */}
           {currentRoute.startsWith("/learn") && (
             <LearnPage
+              key={currentRoute}
               initialSubpage={currentRoute}
               onNavigate={navigateTo}
             />
@@ -412,6 +456,7 @@ export const App: React.FC = () => {
           {/* 4. Developer Command Center */}
           {currentRoute.startsWith("/developers") && (
             <DevelopersPortalPage
+              key={currentRoute}
               network={network}
               initialTab={currentRoute.replace("/developers", "")}
               onNavigate={navigateTo}
@@ -430,7 +475,7 @@ export const App: React.FC = () => {
             />
           )}
 
-          {currentRoute.startsWith("/validator/") && currentValidator && (
+          {currentRoute.startsWith("/validator/") && !routeLoading && !routeMissing && currentValidator && (
             <ValidatorDetailsPage
               validator={currentValidator}
               onBack={() => navigateTo("/validators")}
@@ -453,15 +498,31 @@ export const App: React.FC = () => {
               onSelectContract={handleSelectContract}
               onSelectAddress={handleSelectAddress}
               onSelectBlock={handleSelectBlock}
+              onVerifyContract={(newContract) => {
+                apiService.saveContract(newContract);
+                setContracts((prev) => [
+                  newContract,
+                  ...prev.filter((c) => c.address.toLowerCase() !== newContract.address.toLowerCase()),
+                ]);
+                setCurrentContract(newContract);
+                navigateTo(`/contract/${newContract.address}`);
+              }}
             />
           )}
 
-          {currentRoute.startsWith("/contract/") && currentContract && (
+          {currentRoute.startsWith("/contract/") && !routeLoading && !routeMissing && currentContract && (
             <ContractDetailsPage
               contract={currentContract}
               onBack={() => navigateTo("/contracts")}
               onSelectAddress={handleSelectAddress}
               onSelectBlock={handleSelectBlock}
+              onContractUpdated={(updated) => {
+                apiService.saveContract(updated);
+                setContracts((prev) =>
+                  prev.map((c) => (c.address.toLowerCase() === updated.address.toLowerCase() ? updated : c))
+                );
+                setCurrentContract(updated);
+              }}
             />
           )}
 
@@ -471,6 +532,7 @@ export const App: React.FC = () => {
             currentRoute === "/markets") && (
             <EcosystemPage
               currency={currency}
+              network={network}
               initialTab={currentRoute}
               onNavigate={navigateTo}
             />
@@ -482,6 +544,7 @@ export const App: React.FC = () => {
             currentRoute.startsWith("/community/grants") ||
             currentRoute.startsWith("/security/bug-bounty")) && (
             <GovernancePage
+              key={currentRoute}
               initialTab={currentRoute}
               onNavigate={navigateTo}
             />

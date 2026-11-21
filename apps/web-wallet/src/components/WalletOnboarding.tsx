@@ -1,8 +1,8 @@
 import React, { useState } from "react";
-import { MnemonicUtil, WalletVault } from "@sprax/wallet-core";
+import { MnemonicUtil } from "@sprax/wallet-core";
 
 interface OnboardingProps {
-  onVaultCreated: (mnemonic: string, password: string) => void;
+  onVaultCreated: (mnemonic: string, password: string) => Promise<void>;
 }
 
 export const WalletOnboarding: React.FC<OnboardingProps> = ({ onVaultCreated }) => {
@@ -14,6 +14,7 @@ export const WalletOnboarding: React.FC<OnboardingProps> = ({ onVaultCreated }) 
   const [verificationIndex, setVerificationIndex] = useState(0);
   const [verificationInput, setVerificationInput] = useState("");
   const [errorMessage, setErrorMessage] = useState("");
+  const [busy, setBusy] = useState(false);
 
   const handleStartCreate = () => {
     const mnemonic = MnemonicUtil.generate(12);
@@ -38,6 +39,7 @@ export const WalletOnboarding: React.FC<OnboardingProps> = ({ onVaultCreated }) 
 
   const handleCompletePassword = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (busy) return;
     if (password.length < 8) {
       setErrorMessage("Password must be at least 8 characters long.");
       return;
@@ -48,7 +50,18 @@ export const WalletOnboarding: React.FC<OnboardingProps> = ({ onVaultCreated }) 
     }
 
     const mnemonicToSave = generatedMnemonic || importInput.trim().toLowerCase();
-    onVaultCreated(mnemonicToSave, password);
+    setBusy(true);
+    setErrorMessage("");
+    try {
+      await onVaultCreated(mnemonicToSave, password);
+      setGeneratedMnemonic("");
+      setImportInput("");
+      setVerificationInput("");
+      setPassword("");
+      setConfirmPassword("");
+    } catch (error) {
+      setErrorMessage(error instanceof Error ? error.message : "Unable to save wallet");
+    } finally { setBusy(false); }
   };
 
   const handleImportMnemonic = () => {
@@ -177,9 +190,10 @@ export const WalletOnboarding: React.FC<OnboardingProps> = ({ onVaultCreated }) 
           />
           <button
             type="submit"
+            disabled={busy}
             style={{ width: "100%", padding: 14, background: "#3b82f6", color: "#fff", border: "none", borderRadius: 10, fontSize: 16, fontWeight: "bold", cursor: "pointer" }}
           >
-            Create Encrypted Vault
+            {busy ? "Saving encrypted vault…" : "Create Encrypted Vault"}
           </button>
         </form>
       )}

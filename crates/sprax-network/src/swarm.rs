@@ -9,6 +9,8 @@ use std::{
 use tokio::sync::mpsc;
 use tracing::info;
 
+use sprax_consensus::{EquivocationEvidence, SignedProposal, Vote};
+
 /// Virtual In-Memory Node Endpoint within a Testnet Swarm.
 #[derive(Debug, Clone)]
 pub struct SwarmNodeEndpoint {
@@ -16,6 +18,9 @@ pub struct SwarmNodeEndpoint {
     pub tx_sender: mpsc::UnboundedSender<NetworkMessage>,
     pub inbound_tx_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Transaction>>>,
     pub inbound_block_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Block>>>,
+    pub inbound_vote_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<Vote>>>,
+    pub inbound_proposal_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<SignedProposal>>>,
+    pub inbound_evidence_rx: Arc<tokio::sync::Mutex<mpsc::UnboundedReceiver<EquivocationEvidence>>>,
 }
 
 /// Swarm Hub managing a local multi-node virtual testnet mesh.
@@ -36,6 +41,11 @@ impl SwarmHub {
         let (node_in_tx, mut node_in_rx) = mpsc::unbounded_channel::<NetworkMessage>();
         let (inbound_tx_tx, inbound_tx_rx) = mpsc::unbounded_channel::<Transaction>();
         let (inbound_block_tx, inbound_block_rx) = mpsc::unbounded_channel::<Block>();
+        let (inbound_vote_tx, inbound_vote_rx) = mpsc::unbounded_channel::<Vote>();
+        let (inbound_proposal_tx, inbound_proposal_rx) =
+            mpsc::unbounded_channel::<SignedProposal>();
+        let (inbound_evidence_tx, inbound_evidence_rx) =
+            mpsc::unbounded_channel::<EquivocationEvidence>();
 
         self.nodes
             .write()
@@ -52,6 +62,15 @@ impl SwarmHub {
                     NetworkMessage::BlockGossip(block) => {
                         let _ = inbound_block_tx.send(block);
                     }
+                    NetworkMessage::Vote(vote) => {
+                        let _ = inbound_vote_tx.send(vote);
+                    }
+                    NetworkMessage::Proposal(proposal) => {
+                        let _ = inbound_proposal_tx.send(proposal);
+                    }
+                    NetworkMessage::Evidence(evidence) => {
+                        let _ = inbound_evidence_tx.send(evidence);
+                    }
                     _ => {}
                 }
             }
@@ -63,6 +82,9 @@ impl SwarmHub {
             tx_sender: node_in_tx,
             inbound_tx_rx: Arc::new(tokio::sync::Mutex::new(inbound_tx_rx)),
             inbound_block_rx: Arc::new(tokio::sync::Mutex::new(inbound_block_rx)),
+            inbound_vote_rx: Arc::new(tokio::sync::Mutex::new(inbound_vote_rx)),
+            inbound_proposal_rx: Arc::new(tokio::sync::Mutex::new(inbound_proposal_rx)),
+            inbound_evidence_rx: Arc::new(tokio::sync::Mutex::new(inbound_evidence_rx)),
         }
     }
 
@@ -93,6 +115,41 @@ impl SwarmHub {
     /// Removes artificial delay on messages.
     pub fn clear_delay(&self, peer: &PeerId) {
         self.delayed_peers.write().remove(peer);
+    }
+
+    /// Sends a point-to-point message from one peer to another, respecting partitions and delays.
+    pub fn send_to(
+        &self,
+        from: &PeerId,
+        to: &PeerId,
+        msg: NetworkMessage,
+    ) -> Result<bool, NetworkError> {
+        let partitions = self.partitions.read();
+        if partitions.contains(&(from.clone(), to.clone())) {
+            return Ok(false); // dropped by partition
+        }
+
+        let nodes = self.nodes.read();
+        if let Some(sender) = nodes.get(to) {
+            let is_delayed = self.delayed_peers.read().contains(to);
+            if is_delayed {
+                let s = sender.clone();
+                tokio::spawn(async move {
+                    tokio::time::sleep(Duration::from_millis(50)).await;
+                    let _ = s.send(msg);
+                });
+            } else {
+                let _ = sender.send(msg);
+            }
+            Ok(true)
+        } else {
+            Ok(false)
+        }
+    }
+
+    /// Returns all registered active peer IDs in the swarm.
+    pub fn active_peers(&self) -> Vec<PeerId> {
+        self.nodes.read().keys().cloned().collect()
     }
 
     /// Broadcasts a network message from sender to all other swarm nodes, respecting partitions and delays.

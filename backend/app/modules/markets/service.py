@@ -1,8 +1,7 @@
 from __future__ import annotations
-from typing import Any
+
+from app.db.redis import TTL_CANDLES_1H, TTL_MARKETS, TTL_TICKER, TTL_TRENDING, redis_get, redis_set
 from app.modules.markets.provider import get_market_provider
-from app.db.redis import redis_get, redis_set, TTL_MARKETS, TTL_TICKER, TTL_CANDLES_1H, TTL_TRENDING
-from app.core.logging import logger
 
 
 class MarketService:

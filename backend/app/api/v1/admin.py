@@ -1,26 +1,26 @@
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel, Field
-from typing import Optional, List, Dict, Any
-from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc, update
-from decimal import Decimal
 import uuid
-from datetime import datetime, timezone, timedelta
+from datetime import UTC, datetime
+from decimal import Decimal
 
-from app.core.dependencies import get_db, require_admin, get_current_user
-from app.db.models.admin import FeatureFlag, AuditLog, AdminUser
-from app.db.models.user import User, Session, Device
-from app.db.models.blockchain import Block, Transaction, Address
-from app.db.models.indexer import IndexerState, NetworkStat
-from app.db.models.validator import Validator, Delegation
-from app.db.models.market import Asset, MarketSnapshot
-from app.db.models.discover import EcosystemProject
-from app.db.models.perp import PerpMarket, Order, Position
-from app.db.models.notification import SystemAnnouncement
-from app.core.response import ApiResponse
-from app.core.security import hash_password, verify_password, create_access_token
+from fastapi import APIRouter, Depends, HTTPException, Query
+from pydantic import BaseModel
+from sqlalchemy import desc, func, select
+from sqlalchemy.ext.asyncio import AsyncSession
+
 from app.core.config import settings
+from app.core.dependencies import get_current_user, get_db, require_admin
 from app.core.logging import logger
+from app.core.response import ApiResponse
+from app.core.security import create_access_token, hash_password, verify_password
+from app.db.models.admin import AdminUser, AuditLog, FeatureFlag
+from app.db.models.blockchain import Block, Transaction
+from app.db.models.discover import EcosystemProject
+from app.db.models.indexer import IndexerState
+from app.db.models.market import Asset, MarketSnapshot
+from app.db.models.notification import SystemAnnouncement
+from app.db.models.perp import Order, PerpMarket, Position
+from app.db.models.user import Session, User
+from app.db.models.validator import Validator
 
 router = APIRouter()
 
@@ -40,7 +40,7 @@ class CreateAdminRequest(BaseModel):
 
 class UpdateAdminRoleRequest(BaseModel):
     role: str
-    is_active: Optional[bool] = None
+    is_active: bool | None = None
 
 
 @router.post("/login")
@@ -51,7 +51,7 @@ async def admin_login(req: AdminLoginRequest, db: AsyncSession = Depends(get_db)
     if not admin or not verify_password(req.password, admin.password_hash):
         raise HTTPException(status_code=401, detail="Invalid admin credentials")
     
-    admin.last_login = datetime.now(timezone.utc)
+    admin.last_login = datetime.now(UTC)
     
     audit = AuditLog(
         actor=admin.username,
@@ -151,7 +151,6 @@ async def create_admin(req: CreateAdminRequest, user: dict = Depends(require_adm
 async def get_admin_dashboard(user: dict = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """Aggregate ecosystem overview for the main admin dashboard."""
     # Blockchain counts
-    block_count = (await db.execute(select(func.count(Block.id)))).scalar_one() or 0
     latest_block = (await db.execute(select(Block).order_by(desc(Block.height)).limit(1))).scalar_one_or_none()
     tx_count = (await db.execute(select(func.count(Transaction.id)))).scalar_one() or 0
     
@@ -210,7 +209,9 @@ async def get_admin_dashboard(user: dict = Depends(require_admin), db: AsyncSess
 async def get_system_health(user: dict = Depends(require_admin), db: AsyncSession = Depends(get_db)):
     """Deep health monitor across all ecosystem microservices."""
     import time
+
     from sqlalchemy import text
+
     from app.db.redis import redis_get
     from app.modules.blockchain.client import get_chain_client
 
@@ -251,7 +252,7 @@ async def get_system_health(user: dict = Depends(require_admin), db: AsyncSessio
     return ApiResponse.ok({
         "status": "healthy" if (db_ok and redis_ok) else "degraded",
         "environment": settings.app_env.upper(),
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "services": [
             {"name": "FastAPI Core API", "type": "backend", "status": "OPERATIONAL", "uptime": "99.99%", "latency": "1ms"},
             {"name": "PostgreSQL Primary", "type": "database", "status": "OPERATIONAL" if db_ok else "OFFLINE", "uptime": "100%", "latency": f"{db_latency}ms"},
@@ -274,8 +275,8 @@ class AppVersionUpdateRequest(BaseModel):
     latest_version: str
     force_update: bool = False
     maintenance_mode: bool = False
-    maintenance_message: Optional[str] = None
-    update_url_android: Optional[str] = None
+    maintenance_message: str | None = None
+    update_url_android: str | None = None
 
 
 @router.get("/app/users")
@@ -377,7 +378,7 @@ async def get_indexer_status(user: dict = Depends(require_admin), db: AsyncSessi
         "is_syncing": idx_state.is_syncing if idx_state else False,
         "status": "HEALTHY" if (not idx_state or idx_state.lag_blocks < 5) else "SYNCING",
         "last_error": idx_state.last_error if idx_state else None,
-        "updated_at": idx_state.updated_at.isoformat() if idx_state and idx_state.updated_at else datetime.now(timezone.utc).isoformat()
+        "updated_at": idx_state.updated_at.isoformat() if idx_state and idx_state.updated_at else datetime.now(UTC).isoformat()
     })
 
 
@@ -456,9 +457,9 @@ async def list_admin_discover(user: dict = Depends(require_admin), db: AsyncSess
 
 
 class ProjectUpdateRequest(BaseModel):
-    is_active: Optional[bool] = None
-    is_featured: Optional[bool] = None
-    is_verified: Optional[bool] = None
+    is_active: bool | None = None
+    is_featured: bool | None = None
+    is_verified: bool | None = None
 
 
 @router.patch("/discover/{project_id}")
@@ -554,7 +555,7 @@ class BroadcastNotificationRequest(BaseModel):
     title: str
     body: str
     type: str = "general"  # general, maintenance, security, update
-    action_url: Optional[str] = None
+    action_url: str | None = None
 
 
 @router.get("/notifications")

@@ -23,3 +23,9 @@ pub enum ConsensusError {
     #[error("Round timeout: height {height}, round {round}")]
     RoundTimeout { height: u64, round: u32 },
 }
+
+impl From<sprax_types::TypeError> for ConsensusError {
+    fn from(e: sprax_types::TypeError) -> Self {
+        ConsensusError::InvalidVote(e.to_string())
+    }
+}

@@ -1,8 +1,10 @@
-from fastapi import APIRouter
-from app.db.session import engine
-from app.db.redis import get_redis
-from app.modules.blockchain.client import get_chain_client
 import asyncio
+
+from fastapi import APIRouter
+
+from app.db.redis import get_redis
+from app.db.session import engine
+from app.modules.blockchain.client import get_chain_client
 
 router = APIRouter()
 

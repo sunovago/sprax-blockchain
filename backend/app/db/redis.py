@@ -1,7 +1,9 @@
-import redis.asyncio as aioredis
-from app.core.config import settings
-from typing import Any
 import json
+from typing import Any
+
+import redis.asyncio as aioredis
+
+from app.core.config import settings
 
 _redis: aioredis.Redis | None = None
 

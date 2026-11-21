@@ -4,10 +4,13 @@ Chain RPC: JSON-RPC 2.0 on port 26657
 Never call chain RPC independently from individual feature modules.
 """
 from __future__ import annotations
-import httpx
+
 from typing import Any
+
+import httpx
+
 from app.core.config import settings
-from app.core.exceptions import SpraxError, RPC_UNAVAILABLE, INVALID_ADDRESS, INVALID_TRANSACTION
+from app.core.exceptions import INVALID_TRANSACTION, RPC_UNAVAILABLE, SpraxError
 from app.core.logging import logger
 
 
@@ -67,10 +70,24 @@ class SpraxChainClient:
         status = await self.get_status()
         return int(status.get("latestBlockHeight", 0))
 
+    async def get_chain_info(self) -> dict:
+        """Returns detailed chain metadata, genesis, and consensus params."""
+        return await self._rpc_call("sprx_getChainInfo") or {}
+
+    async def get_sync_status(self) -> dict:
+        """Returns node synchronization status."""
+        return await self._rpc_call("sprx_getSyncStatus") or {}
+
     # ---- Blocks ----
     async def get_block(self, height_or_hash: str | int) -> dict | None:
         """Get a block by height (int) or hash (str)."""
         return await self._rpc_call("sprax_getBlock", [str(height_or_hash)])
+
+    async def get_block_by_number(self, height: int, full_tx: bool = False) -> dict | None:
+        return await self._rpc_call("sprx_getBlockByNumber", [height, full_tx])
+
+    async def get_block_by_hash(self, block_hash: str, full_tx: bool = False) -> dict | None:
+        return await self._rpc_call("sprx_getBlockByHash", [block_hash, full_tx])
 
     async def get_latest_block(self) -> dict | None:
         height = await self.get_latest_block_height()
@@ -79,6 +96,23 @@ class SpraxChainClient:
     # ---- Transactions ----
     async def get_transaction(self, tx_hash: str) -> dict | None:
         return await self._rpc_call("sprax_getTransaction", [tx_hash])
+
+    async def get_transaction_by_hash(self, tx_hash: str) -> dict | None:
+        return await self._rpc_call("sprx_getTransactionByHash", [tx_hash])
+
+    async def get_transaction_receipt(self, tx_hash: str) -> dict | None:
+        return await self._rpc_call("sprx_getTransactionReceipt", [tx_hash])
+
+    async def get_transaction_status(self, tx_hash: str) -> dict | None:
+        return await self._rpc_call("sprx_getTransactionStatus", [tx_hash])
+
+    async def get_pending_transactions(self) -> list[dict]:
+        res = await self._rpc_call("sprx_getPendingTransactions")
+        return res if isinstance(res, list) else []
+
+    async def send_raw_transaction(self, raw_tx: str | dict) -> dict:
+        """Submits signed raw transaction hex or JSON."""
+        return await self._rpc_call("sprx_sendRawTransaction", [raw_tx])
 
     # ---- Accounts ----
     async def get_account(self, address: str) -> dict:
@@ -94,6 +128,9 @@ class SpraxChainClient:
     async def get_nonce(self, address: str) -> int:
         account = await self.get_account(address)
         return int(account.get("nonce", 0))
+
+    async def get_account_state(self, address: str) -> dict:
+        return await self._rpc_call("sprx_getAccountState", [address]) or {}
 
     # ---- Fee estimation ----
     async def estimate_fee(self, tx_body: dict) -> dict:
@@ -131,6 +168,18 @@ class SpraxChainClient:
         result = await self._rpc_call("sprax_getValidators")
         return result if isinstance(result, list) else []
 
+    async def get_validator(self, address: str) -> dict | None:
+        return await self._rpc_call("sprx_getValidator", [address])
+
+    async def get_validator_status(self, address: str) -> dict | None:
+        return await self._rpc_call("sprx_getValidatorStatus", [address])
+
+    async def get_validator_voting_power(self, address: str) -> dict | None:
+        return await self._rpc_call("sprx_getValidatorVotingPower", [address])
+
+    async def get_validator_rewards(self, address: str) -> dict | None:
+        return await self._rpc_call("sprx_getValidatorRewards", [address])
+
     # ---- Staking ----
     async def get_delegations(self, address: str) -> list[dict]:
         try:
@@ -145,6 +194,62 @@ class SpraxChainClient:
             return result or {}
         except SpraxError:
             return {}
+
+    async def get_staking_info(self) -> dict:
+        return await self._rpc_call("sprx_getStakingInfo") or {}
+
+    async def get_unbonding_requests(self, address: str) -> list[dict]:
+        res = await self._rpc_call("sprx_getUnbondingRequests", [address])
+        return res if isinstance(res, list) else []
+
+    # ---- Network & Node ----
+    async def get_network_peers(self) -> list[dict]:
+        res = await self._rpc_call("sprx_netPeers")
+        return res if isinstance(res, list) else []
+
+    async def get_node_info(self) -> dict:
+        return await self._rpc_call("sprx_nodeInfo") or {}
+
+    async def get_node_health(self) -> dict:
+        return await self._rpc_call("sprx_nodeHealth") or {}
+
+    # ---- Smart Contracts ----
+    async def deploy_contract(self, signed_tx: dict) -> dict:
+        """Broadcast a signed contract deployment transaction."""
+        return await self._rpc_call("sprx_deployContract", [signed_tx])
+
+    async def call_contract(self, signed_tx: dict) -> dict:
+        """Broadcast a signed contract call transaction."""
+        return await self._rpc_call("sprx_callContract", [signed_tx])
+
+    async def query_contract(self, address: str, msg: dict | str, gas: int = 200_000) -> dict:
+        """Execute a read-only query against a deployed contract."""
+        return await self._rpc_call("sprx_queryContract", [address, msg, gas]) or {}
+
+    async def get_contract(self, address: str) -> dict | None:
+        """Retrieve contract metadata (code_id, creator, admin, label)."""
+        return await self._rpc_call("sprx_getContract", [address])
+
+    async def get_contract_code(self, address_or_code_hash: str) -> dict | None:
+        """Retrieve contract bytecode."""
+        return await self._rpc_call("sprx_getContractCode", [address_or_code_hash])
+
+    async def get_contract_storage(self, address: str, key: str) -> dict | None:
+        """Retrieve raw storage key value."""
+        return await self._rpc_call("sprx_getContractStorage", [address, key])
+
+    async def get_contract_events(self, address: str, limit: int = 50) -> list[dict]:
+        """Retrieve recent events emitted by a contract."""
+        res = await self._rpc_call("sprx_getContractEvents", [address, limit])
+        return res if isinstance(res, list) else []
+
+    async def estimate_contract_gas(self, address: str, msg: dict, funds: str | None = None) -> dict:
+        """Estimate gas and fee required for a contract interaction."""
+        return await self._rpc_call("sprx_estimateContractGas", [address, msg, funds]) or {}
+
+    async def get_contract_receipt(self, tx_hash: str) -> dict | None:
+        """Retrieve execution receipt including contract return data and events."""
+        return await self._rpc_call("sprx_getContractReceipt", [tx_hash])
 
     async def close(self) -> None:
         await self._client.aclose()

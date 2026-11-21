@@ -142,7 +142,7 @@ export interface EcosystemProject {
   tagline: string;
   description: string;
   category: "DeFi" | "RWA & Payments" | "Wallets" | "Infrastructure" | "Enterprise" | "Gaming & Identity";
-  stage: "Mainnet" | "Testnet" | "In Development";
+  stage: "Mainnet" | "Testnet" | "In Development" | "Listed";
   verified: boolean;
   website: string;
   github?: string;

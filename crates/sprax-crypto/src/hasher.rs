@@ -54,35 +54,10 @@ impl Hasher {
         Ok(Self::blake3(&bytes))
     }
 
-    /// Computes binary Merkle root over a list of 32-byte hashes.
+    /// Computes binary Merkle root over a list of 32-byte hashes using domain separation.
     #[must_use]
     pub fn merkle_root(hashes: &[Hash32]) -> Hash32 {
-        if hashes.is_empty() {
-            return Hash32::ZERO;
-        }
-        if hashes.len() == 1 {
-            return hashes[0];
-        }
-        let mut current: Vec<Hash32> = hashes.to_vec();
-        while current.len() > 1 {
-            let mut next = Vec::with_capacity(current.len().div_ceil(2));
-            for chunk in current.chunks(2) {
-                if chunk.len() == 2 {
-                    let mut combined = [0u8; 64];
-                    combined[0..32].copy_from_slice(chunk[0].as_bytes());
-                    combined[32..64].copy_from_slice(chunk[1].as_bytes());
-                    next.push(Self::blake3(&combined));
-                } else {
-                    // Duplicate last element if odd number of hashes
-                    let mut combined = [0u8; 64];
-                    combined[0..32].copy_from_slice(chunk[0].as_bytes());
-                    combined[32..64].copy_from_slice(chunk[0].as_bytes());
-                    next.push(Self::blake3(&combined));
-                }
-            }
-            current = next;
-        }
-        current[0]
+        crate::merkle::MerkleTree::compute_root(hashes)
     }
 }
 

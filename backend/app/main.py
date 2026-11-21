@@ -1,24 +1,23 @@
-from contextlib import asynccontextmanager
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
-from fastapi.middleware.trustedhost import TrustedHostMiddleware
-from slowapi import _rate_limit_exceeded_handler
-from slowapi.errors import RateLimitExceeded
 import asyncio
 import uuid
+from contextlib import asynccontextmanager
 
-from app.core.config import settings
-from app.core.logging import configure_logging
-from app.core.exceptions import (
-    SpraxError, sprax_exception_handler,
-    http_exception_handler, unhandled_exception_handler,
-)
-from app.core.rate_limit import limiter, rate_limit_exceeded_handler
-from app.api.router import api_router
-from app.websocket.routes import ws_router
-from fastapi import HTTPException
+from fastapi import FastAPI, HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from slowapi.errors import RateLimitExceeded
 from starlette.requests import Request
-from starlette.responses import JSONResponse
+
+from app.api.router import api_router
+from app.core.config import settings
+from app.core.exceptions import (
+    SpraxError,
+    http_exception_handler,
+    sprax_exception_handler,
+    unhandled_exception_handler,
+)
+from app.core.logging import configure_logging
+from app.core.rate_limit import limiter, rate_limit_exceeded_handler
+from app.websocket.routes import ws_router
 
 configure_logging()
 
@@ -57,11 +56,13 @@ app.add_middleware(
 
 # Rate limiting
 app.state.limiter = limiter
-app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)
+app.add_exception_handler(RateLimitExceeded, rate_limit_exceeded_handler)  # type: ignore[arg-type]
 
 # Exception handlers
-app.add_exception_handler(SpraxError, sprax_exception_handler)
-app.add_exception_handler(HTTPException, http_exception_handler)
+# Starlette's stub types the handler as accepting any Exception, but it dispatches
+# by the registered class, so a handler typed to the specific subclass is safe.
+app.add_exception_handler(SpraxError, sprax_exception_handler)  # type: ignore[arg-type]
+app.add_exception_handler(HTTPException, http_exception_handler)  # type: ignore[arg-type]
 app.add_exception_handler(Exception, unhandled_exception_handler)
 
 # Request ID middleware

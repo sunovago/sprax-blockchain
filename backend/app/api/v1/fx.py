@@ -1,6 +1,7 @@
 from fastapi import APIRouter
-from app.modules.fx.service import get_fx_service
+
 from app.core.response import ApiResponse
+from app.modules.fx.service import get_fx_service
 
 router = APIRouter()
 

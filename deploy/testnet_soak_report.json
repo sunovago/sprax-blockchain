@@ -1,0 +1,31 @@
+{
+  "timestamp": "2026-10-07T12:59:46.568849+00:00",
+  "chain_id": "sprax-devnet-1",
+  "rpc_url": "http://127.0.0.1:26657",
+  "test_summary": {
+    "total_broadcast": 15,
+    "total_confirmed": 15,
+    "total_failed": 0,
+    "error_count": 0,
+    "start_height": 2106,
+    "end_height": 2112,
+    "blocks_produced": 6,
+    "total_duration_sec": 8.71,
+    "effective_tps": 1.72,
+    "avg_submission_latency_ms": 29.41,
+    "avg_confirmation_latency_sec": 5.14
+  },
+  "balances": {
+    "initial": {
+      "alice": "904210997000000000000000",
+      "bob": "500000999000000000000000",
+      "charlie": "99999999000000000000000"
+    },
+    "final": {
+      "alice": "904222994500000000000000",
+      "bob": "500000996500000000000000",
+      "charlie": "99999996500000000000000"
+    }
+  },
+  "status": "PASS"
+}

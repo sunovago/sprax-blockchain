@@ -1,4 +1,4 @@
-import { sha256 } from "@noble/hashes/sha256";
+import { blake3 } from "@noble/hashes/blake3";
 import { hmac } from "@noble/hashes/hmac";
 import { sha512 } from "@noble/hashes/sha512";
 import * as ed25519 from "@noble/curves/ed25519";
@@ -15,12 +15,13 @@ export const DEFAULT_DERIVATION_PATH = `m/44'/${SPRAX_COIN_TYPE}'/0'/0`;
  */
 export class HDWallet {
   private seed: Uint8Array;
+  private destroyed = false;
 
   constructor(seed: Uint8Array) {
     if (seed.length !== 64) {
       throw new Error(`HD wallet seed must be 64 bytes, got ${seed.length}`);
     }
-    this.seed = seed;
+    this.seed = seed.slice();
   }
 
   /**
@@ -28,13 +29,20 @@ export class HDWallet {
    */
   public static fromMnemonic(mnemonic: string, passphrase: string = ""): HDWallet {
     const seed = MnemonicUtil.toSeed(mnemonic, passphrase);
-    return new HDWallet(seed);
+    try { return new HDWallet(seed); } finally { seed.fill(0); }
+  }
+
+  /** Release the retained seed. Derived private keys remain the caller's responsibility. */
+  public destroy(): void {
+    this.seed.fill(0);
+    this.destroyed = true;
   }
 
   /**
    * Derives master private key and chain code using HMAC-SHA512.
    */
   private deriveMasterKey(saltKey: string = "ed25519 seed"): { key: Uint8Array; chainCode: Uint8Array } {
+    if (this.destroyed) throw new Error("Wallet is locked");
     const I = hmac(sha512, new TextEncoder().encode(saltKey), this.seed);
     return {
       key: I.slice(0, 32),
@@ -68,8 +76,8 @@ export class HDWallet {
     // Compute Ed25519 Public Key
     const publicKey = ed25519.ed25519.getPublicKey(privateKey);
 
-    // Address = First 20 bytes of SHA-256(pubkey)
-    const pubHash = sha256(publicKey);
+    // The chain derives addresses from the first 20 bytes of BLAKE3(pubkey).
+    const pubHash = blake3(publicKey);
     const rawAddress = pubHash.slice(0, 20);
 
     const addressBech32 = AddressUtil.toBech32(rawAddress);
@@ -114,7 +122,7 @@ export class HDWallet {
     const privateKey = childI.slice(0, 32);
 
     const publicKey = secp256k1.secp256k1.getPublicKey(privateKey, true); // compressed 33 bytes
-    const pubHash = sha256(publicKey);
+    const pubHash = blake3(publicKey);
     const rawAddress = pubHash.slice(0, 20);
 
     const account: Account = {

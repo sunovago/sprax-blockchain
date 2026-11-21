@@ -37,10 +37,81 @@ class AppTheme {
   static const Color lightTextPrimary = Color(0xFF0F172A);
   static const Color lightTextMuted = Color(0xFF64748B);
 
+  // Font Families (Inter, SpaceGrotesk, Poppins)
+  static const String fontBody = 'Inter';
+  static const String fontHeading = 'SpaceGrotesk';
+  static const String fontAlternate = 'Poppins';
+
+  // Typography Convenience Helpers
+  static TextStyle headingStyle({
+    double fontSize = 18,
+    FontWeight fontWeight = FontWeight.w700,
+    Color? color,
+    double? letterSpacing,
+  }) => TextStyle(
+    fontFamily: fontHeading,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+  );
+
+  static TextStyle bodyStyle({
+    double fontSize = 14,
+    FontWeight fontWeight = FontWeight.w400,
+    Color? color,
+    double? height,
+  }) => TextStyle(
+    fontFamily: fontBody,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    height: height,
+  );
+
+  static TextStyle poppinsStyle({
+    double fontSize = 14,
+    FontWeight fontWeight = FontWeight.w500,
+    Color? color,
+    double? letterSpacing,
+  }) => TextStyle(
+    fontFamily: fontAlternate,
+    fontSize: fontSize,
+    fontWeight: fontWeight,
+    color: color,
+    letterSpacing: letterSpacing,
+  );
+
+  static TextTheme _buildTextTheme(Brightness brightness) {
+    final isDark = brightness == Brightness.dark;
+    final primary = isDark ? Colors.white : lightTextPrimary;
+    final muted = isDark ? textMuted : lightTextMuted;
+
+    return TextTheme(
+      displayLarge: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 32, fontWeight: FontWeight.w700, letterSpacing: -0.5),
+      displayMedium: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 28, fontWeight: FontWeight.w700, letterSpacing: -0.5),
+      displaySmall: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 24, fontWeight: FontWeight.w600, letterSpacing: -0.3),
+      headlineLarge: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 22, fontWeight: FontWeight.w700),
+      headlineMedium: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 20, fontWeight: FontWeight.w600),
+      headlineSmall: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 18, fontWeight: FontWeight.w600),
+      titleLarge: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 16, fontWeight: FontWeight.w600),
+      titleMedium: TextStyle(fontFamily: fontBody, color: primary, fontSize: 14, fontWeight: FontWeight.w600),
+      titleSmall: TextStyle(fontFamily: fontBody, color: muted, fontSize: 12, fontWeight: FontWeight.w500),
+      bodyLarge: TextStyle(fontFamily: fontBody, color: primary, fontSize: 16, fontWeight: FontWeight.w400),
+      bodyMedium: TextStyle(fontFamily: fontBody, color: primary, fontSize: 14, fontWeight: FontWeight.w400),
+      bodySmall: TextStyle(fontFamily: fontBody, color: muted, fontSize: 12, fontWeight: FontWeight.w400),
+      labelLarge: TextStyle(fontFamily: fontHeading, color: primary, fontSize: 14, fontWeight: FontWeight.w700, letterSpacing: 0.3),
+      labelMedium: TextStyle(fontFamily: fontBody, color: muted, fontSize: 12, fontWeight: FontWeight.w500),
+      labelSmall: TextStyle(fontFamily: fontBody, color: muted, fontSize: 10, fontWeight: FontWeight.w500),
+    );
+  }
+
   static ThemeData get darkTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.dark,
+      fontFamily: fontBody,
+      textTheme: _buildTextTheme(Brightness.dark),
       scaffoldBackgroundColor: darkBackground,
       colorScheme: const ColorScheme.dark(
         primary: primaryCyan,
@@ -62,6 +133,7 @@ class AppTheme {
         scrolledUnderElevation: 0,
         centerTitle: false,
         titleTextStyle: TextStyle(
+          fontFamily: fontHeading,
           color: Colors.white,
           fontSize: 18,
           fontWeight: FontWeight.w700,
@@ -74,8 +146,8 @@ class AppTheme {
         selectedItemColor: primaryCyan,
         unselectedItemColor: textMuted,
         type: BottomNavigationBarType.fixed,
-        selectedLabelStyle: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-        unselectedLabelStyle: TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+        selectedLabelStyle: TextStyle(fontFamily: fontHeading, fontSize: 11, fontWeight: FontWeight.w700),
+        unselectedLabelStyle: TextStyle(fontFamily: fontBody, fontSize: 11, fontWeight: FontWeight.w500),
         elevation: 8,
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
@@ -87,6 +159,7 @@ class AppTheme {
             borderRadius: BorderRadius.circular(12),
           ),
           textStyle: const TextStyle(
+            fontFamily: fontHeading,
             fontSize: 15,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.3,
@@ -102,6 +175,7 @@ class AppTheme {
             borderRadius: BorderRadius.circular(12),
           ),
           textStyle: const TextStyle(
+            fontFamily: fontHeading,
             fontSize: 15,
             fontWeight: FontWeight.w600,
           ),
@@ -111,8 +185,8 @@ class AppTheme {
         labelColor: primaryCyan,
         unselectedLabelColor: textMuted,
         indicatorColor: primaryCyan,
-        labelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w700),
-        unselectedLabelStyle: TextStyle(fontSize: 13, fontWeight: FontWeight.w500),
+        labelStyle: TextStyle(fontFamily: fontHeading, fontSize: 13, fontWeight: FontWeight.w700),
+        unselectedLabelStyle: TextStyle(fontFamily: fontBody, fontSize: 13, fontWeight: FontWeight.w500),
       ),
       inputDecorationTheme: InputDecorationTheme(
         filled: true,
@@ -130,8 +204,8 @@ class AppTheme {
           borderRadius: BorderRadius.circular(12),
           borderSide: const BorderSide(color: primaryCyan, width: 1.5),
         ),
-        hintStyle: const TextStyle(color: textMuted, fontSize: 14),
-        labelStyle: const TextStyle(color: primaryCyan, fontSize: 14),
+        hintStyle: const TextStyle(fontFamily: fontBody, color: textMuted, fontSize: 14),
+        labelStyle: const TextStyle(fontFamily: fontHeading, color: primaryCyan, fontSize: 14),
       ),
     );
   }
@@ -140,6 +214,8 @@ class AppTheme {
     return ThemeData(
       useMaterial3: true,
       brightness: Brightness.light,
+      fontFamily: fontBody,
+      textTheme: _buildTextTheme(Brightness.light),
       scaffoldBackgroundColor: lightBackground,
       colorScheme: const ColorScheme.light(
         primary: Color(0xFF007788),
@@ -161,6 +237,7 @@ class AppTheme {
         scrolledUnderElevation: 0,
         centerTitle: false,
         titleTextStyle: TextStyle(
+          fontFamily: fontHeading,
           color: lightTextPrimary,
           fontSize: 18,
           fontWeight: FontWeight.w700,
@@ -173,8 +250,8 @@ class AppTheme {
         selectedItemColor: Color(0xFF007788),
         unselectedItemColor: lightTextMuted,
         type: BottomNavigationBarType.fixed,
-        selectedLabelStyle: TextStyle(fontSize: 11, fontWeight: FontWeight.w700),
-        unselectedLabelStyle: TextStyle(fontSize: 11, fontWeight: FontWeight.w500),
+        selectedLabelStyle: TextStyle(fontFamily: fontHeading, fontSize: 11, fontWeight: FontWeight.w700),
+        unselectedLabelStyle: TextStyle(fontFamily: fontBody, fontSize: 11, fontWeight: FontWeight.w500),
         elevation: 8,
       ),
       elevatedButtonTheme: ElevatedButtonThemeData(
@@ -186,6 +263,7 @@ class AppTheme {
             borderRadius: BorderRadius.circular(12),
           ),
           textStyle: const TextStyle(
+            fontFamily: fontHeading,
             fontSize: 15,
             fontWeight: FontWeight.w700,
             letterSpacing: 0.3,

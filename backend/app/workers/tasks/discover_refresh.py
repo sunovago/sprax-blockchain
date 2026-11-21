@@ -1,7 +1,8 @@
 import asyncio
-from app.workers.celery_app import celery_app
-from app.db.redis import redis_delete
+
 from app.core.logging import logger
+from app.db.redis import redis_delete
+from app.workers.celery_app import celery_app
 
 
 @celery_app.task(name="app.workers.tasks.discover_refresh.refresh_discover", bind=True)

@@ -19,4 +19,7 @@ pub enum StorageError {
 
     #[error("Transaction poisoned or lock error: {0}")]
     LockError(String),
+
+    #[error("IO error: {0}")]
+    IoError(String),
 }

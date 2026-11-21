@@ -34,6 +34,12 @@ impl PeerId {
     }
 
     #[must_use]
+    pub fn from_public_key(pubkey: &[u8; 32]) -> Self {
+        let hash = sprax_crypto::Hasher::blake3(pubkey);
+        Self::from_pubkey_hash(&hash)
+    }
+
+    #[must_use]
     pub fn as_str(&self) -> &str {
         &self.0
     }

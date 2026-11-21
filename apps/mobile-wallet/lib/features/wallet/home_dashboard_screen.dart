@@ -8,6 +8,7 @@ import '../../services/market_data_service.dart';
 import '../../services/watchlist_service.dart';
 import '../../services/perps_service.dart';
 import '../send/send_screen.dart';
+import '../trade/buy_sell_screen.dart';
 import '../receive/receive_screen.dart';
 import '../scanner/qr_scanner_screen.dart';
 import '../staking/staking_screen.dart';
@@ -285,6 +286,18 @@ class HomeDashboardScreen extends StatelessWidget {
               ),
               const SizedBox(height: 16),
 
+              Row(children: [
+                Expanded(child: ElevatedButton.icon(
+                  icon: const Icon(Icons.add_circle_outline), label: const Text('Buy'),
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BuySellScreen())),
+                )),
+                const SizedBox(width: 12),
+                Expanded(child: OutlinedButton.icon(
+                  icon: const Icon(Icons.remove_circle_outline), label: const Text('Sell'),
+                  onPressed: () => Navigator.of(context).push(MaterialPageRoute(builder: (_) => const BuySellScreen(initialSide: 'sell'))),
+                )),
+              ]),
+              const SizedBox(height: 20),
               // Quick Actions Row
               Row(
                 mainAxisAlignment: MainAxisAlignment.spaceEvenly,

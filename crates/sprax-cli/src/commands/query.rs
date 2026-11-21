@@ -57,6 +57,21 @@ pub(crate) enum QuerySubcommands {
         #[arg(long, default_value = ".sprx")]
         home: PathBuf,
     },
+    /// Query validator state and canonical lifecycle status
+    Validator {
+        /// Validator operator address (Bech32 sprax1... or Hex 0x...)
+        target: String,
+
+        /// Node home directory
+        #[arg(long, default_value = ".sprx")]
+        home: PathBuf,
+    },
+    /// Query all registered validators and the active validator set
+    Validators {
+        /// Node home directory
+        #[arg(long, default_value = ".sprx")]
+        home: PathBuf,
+    },
 }
 
 pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
@@ -92,7 +107,7 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
             if let Some(name) = name_label {
                 println!("  Key Name       : {name}");
             }
-            println!("  Address (Bech32): {}", address);
+            println!("  Address (Bech32): {address}");
             println!("  Address (Hex)   : {}", address.to_hex());
             println!("  Nonce Sequence : {}", account.nonce);
             println!("------------------------------------------------------------");
@@ -103,10 +118,10 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
             );
             println!("------------------------------------------------------------");
             println!("  Global Currency Display (Reference Feeds):");
-            println!("  - USD ($)       : ${:.2}", usd_val);
-            println!("  - INR (₹)       : ₹{:.2}", inr_val);
-            println!("  - EUR (€)       : €{:.2}", eur_val);
-            println!("  - JPY (¥)       : ¥{:.0}", jpy_val);
+            println!("  - USD ($)       : ${usd_val:.2}");
+            println!("  - INR (₹)       : ₹{inr_val:.2}");
+            println!("  - EUR (€)       : €{eur_val:.2}");
+            println!("  - JPY (¥)       : ¥{jpy_val:.0}");
             println!("============================================================");
         }
         QuerySubcommands::Block { identifier, home } => {
@@ -127,7 +142,7 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
                 println!("============================================================");
                 println!("  BLOCK #{} DETAILS", block.header.height);
                 println!("============================================================");
-                println!("  Block Hash      : {}", block_hash);
+                println!("  Block Hash      : {block_hash}");
                 println!("  Parent Hash     : {}", block.header.parent_hash);
                 println!("  Chain ID        : {}", block.header.chain_id);
                 println!("  Height          : {}", block.header.height);
@@ -143,12 +158,12 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
                 if !block.body.transactions.is_empty() {
                     for (i, tx) in block.body.transactions.iter().enumerate() {
                         let tx_hash = Hasher::tx_hash(tx)?;
-                        println!("  Tx [{}]: {} (Sender: {})", i, tx_hash, tx.body.sender);
+                        println!("  Tx [{i}]: {tx_hash} (Sender: {})", tx.body.sender);
                     }
                 }
                 println!("============================================================");
             } else {
-                println!("Block '{}' not found on chain.", identifier);
+                println!("Block '{identifier}' not found on chain.");
             }
         }
         QuerySubcommands::Tx { tx_hash, home } => {
@@ -160,8 +175,8 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
                 println!("============================================================");
                 println!("  TRANSACTION DETAILS");
                 println!("============================================================");
-                println!("  Tx Hash         : {}", hash);
-                println!("  Block Height    : #{}", height);
+                println!("  Tx Hash         : {hash}");
+                println!("  Block Height    : #{height}");
                 println!(
                     "  Execution Status: {}",
                     if receipt.success { "SUCCESS" } else { "FAILED" }
@@ -176,19 +191,16 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
                 for (idx, msg) in tx.body.messages.iter().enumerate() {
                     match msg {
                         TxMessage::Transfer { to, amount } => {
-                            println!(
-                                "    [{idx}] Transfer -> Recipient: {}, Amount: {}",
-                                to, amount
-                            );
+                            println!("    [{idx}] Transfer -> Recipient: {to}, Amount: {amount}");
                         }
                         _ => {
-                            println!("    [{idx}] Custom Operation: {:?}", msg);
+                            println!("    [{idx}] Custom Operation: {msg:?}");
                         }
                     }
                 }
                 println!("============================================================");
             } else {
-                println!("Transaction '{}' not found in ledger.", tx_hash);
+                println!("Transaction '{tx_hash}' not found in ledger.");
             }
         }
         QuerySubcommands::Status { home } => {
@@ -199,10 +211,10 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
             println!("============================================================");
             println!("  SPRX LOCAL BLOCKCHAIN STATUS");
             println!("============================================================");
-            println!("  Home Directory  : {:?}", home);
+            println!("  Home Directory  : {home:?}");
             println!("  Chain ID        : {}", node.chain_id());
             println!("  Current Height  : #{}", node.height());
-            println!("  Latest Block Hash: {}", latest_hash);
+            println!("  Latest Block Hash: {latest_hash}");
             println!("  State Root      : {}", header.state_root);
             println!("  P2P Port        : {}", node.config().network.p2p_port);
             println!("  RPC Port        : {}", node.config().rpc.json_rpc_port);
@@ -245,10 +257,89 @@ pub(crate) fn execute(args: &QueryArgs) -> anyhow::Result<()> {
             } else {
                 for (i, peer) in peers.iter().enumerate() {
                     println!(
-                        "  [{}] PeerID: {} | Height: #{} | Score: {:.1}",
-                        i, peer.peer_id, peer.height, peer.score.score
+                        "  [{i}] PeerID: {} | Height: #{} | Score: {:.1}",
+                        peer.peer_id, peer.height, peer.score.score
                     );
                 }
+            }
+            println!("============================================================");
+        }
+        QuerySubcommands::Validator { target, home } => {
+            let node = NodeService::new_or_load(home.clone())?;
+            let address = Address::parse(target)
+                .map_err(|e| anyhow::anyhow!("invalid operator address: {e}"))?;
+
+            let (canonical_val, stake, active_set) = {
+                let ledger = node.ledger();
+                let guard = ledger.read();
+                (
+                    guard.get_validator_record(&address)?,
+                    guard.get_validator_stake(&address)?,
+                    guard.active_validators()?,
+                )
+            };
+
+            if let Some(record) = canonical_val {
+                let is_active = active_set.iter().any(|v| v.address == address);
+                let is_eligible = record.status
+                    == sprax_core::state::CanonicalValidatorStatus::Active
+                    && stake.tokens.as_atto() >= 1_000 * 1_000_000_000_000_000_000u128;
+
+                println!("============================================================");
+                println!("  CANONICAL VALIDATOR RECORD");
+                println!("============================================================");
+                println!("  Operator Address : {}", record.operator_address);
+                println!(
+                    "  Consensus PubKey : {}",
+                    hex::encode(record.consensus_pubkey)
+                );
+                println!("  Moniker          : {}", record.moniker);
+                println!("  Status           : {:?}", record.status);
+                println!("  Is Registered    : true");
+                println!("  Is Eligible      : {is_eligible}");
+                println!("  Is Active        : {is_active}");
+                println!(
+                    "  Is Jailed        : {}",
+                    record.status == sprax_core::state::CanonicalValidatorStatus::Jailed
+                );
+                println!("  Is Tombstoned    : {}", record.is_tombstoned);
+                println!(
+                    "  Jailed Until Blk : {}",
+                    record
+                        .jailed_until
+                        .map(|h| format!("#{h}"))
+                        .unwrap_or_else(|| "None".into())
+                );
+                println!("  Bonded Stake     : {}", stake.tokens);
+                println!("  Registered Height: #{}", record.registered_height);
+                println!("============================================================");
+            } else {
+                println!("Validator '{target}' not found in canonical registry.");
+            }
+        }
+        QuerySubcommands::Validators { home } => {
+            let node = NodeService::new_or_load(home.clone())?;
+            let (all_vals, active_set) = {
+                let ledger = node.ledger();
+                let guard = ledger.read();
+                (guard.scan_all_validators()?, guard.active_validators()?)
+            };
+
+            let total_power: u64 = active_set.iter().map(|v| v.voting_power).sum();
+
+            println!("============================================================");
+            println!("  SPRX CANONICAL VALIDATOR REGISTRY");
+            println!("============================================================");
+            println!("  Total Registered : {}", all_vals.len());
+            println!("  Active Set Count : {}", active_set.len());
+            println!("  Total Active Pwr : {total_power}");
+            println!("------------------------------------------------------------");
+            for (idx, val) in all_vals.iter().enumerate() {
+                let is_active = active_set.iter().any(|v| v.address == val.operator_address);
+                println!(
+                    "  [{idx}] {} | Moniker: '{}' | Status: {:?} | Active: {is_active}",
+                    val.operator_address, val.moniker, val.status
+                );
             }
             println!("============================================================");
         }

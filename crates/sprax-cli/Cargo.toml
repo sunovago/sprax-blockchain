@@ -22,6 +22,7 @@ sprax-network.workspace = true
 sprax-consensus.workspace = true
 sprax-core.workspace = true
 sprax-node.workspace = true
+sprax-faucet.workspace = true
 clap.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
@@ -30,5 +31,7 @@ tracing.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 toml.workspace = true
+hex.workspace = true
+ureq = { version = "2.12", features = ["json"] }
 
 [dev-dependencies]

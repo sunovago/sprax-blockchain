@@ -1,5 +1,6 @@
 from functools import lru_cache
 from typing import Literal
+
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -39,6 +40,11 @@ class Settings(BaseSettings):
     fx_api_key: str = ""
     fx_base_url: str = "https://v6.exchangerate-api.com/v6"
 
+    # Hosted Buy/Sell gateway. Empty configuration disables live checkout.
+    trade_gateway_url: str = ""
+    trade_gateway_token: str = ""
+    trade_checkout_hosts: str = ""
+
     # CORS
     cors_origins: str = "http://localhost:3000,http://localhost:5173"
 
@@ -72,6 +78,42 @@ class Settings(BaseSettings):
     feature_staking_enabled: bool = True
     feature_markets_enabled: bool = True
     feature_discover_enabled: bool = True
+    feature_tap_mining_enabled: bool = False
+
+    # Tap Mining (Telegram Mini App)
+    telegram_bot_token: str = ""
+    telegram_auth_max_age_seconds: int = 86400
+    tap_mining_webapp_url: str = ""
+    tap_mining_energy_cap: int = 1000
+    tap_mining_energy_regen_seconds: int = 3
+    tap_mining_points_per_tap: int = 1
+    tap_mining_max_taps_per_request: int = 300
+    tap_mining_rate_limit_per_minute: int = 20
+    tap_mining_min_tap_interval_ms: int = 200
+
+    # Tap Mining — daily check-in
+    tap_mining_checkin_base_points: int = 10
+    tap_mining_checkin_streak_bonus: int = 5
+
+    # Tap Mining — referrals
+    tap_mining_referral_bonus_referrer: int = 100
+    tap_mining_referral_bonus_referee: int = 50
+
+    # Tap Mining — upgrades
+    tap_mining_upgrade_max_level: int = 10
+    tap_mining_upgrade_base_cost: int = 500
+    tap_mining_upgrade_cost_multiplier: float = 1.6
+    tap_mining_upgrade_energy_cap_step: int = 200
+    tap_mining_upgrade_regen_step: int = 1
+    tap_mining_upgrade_min_regen_seconds: int = 1
+    tap_mining_upgrade_multitap_step: int = 1
+
+    # Tap Mining — on-chain claims & faucet payout
+    sprax_faucet_url: str = "http://localhost:8080"
+    tap_mining_claim_min_points: int = 1000
+    tap_mining_points_per_sprx: int = 1000
+    tap_mining_claim_cooldown_seconds: int = 86400
+
 
     # Chain constants
     sprax_address_prefix: str = "sprax1"

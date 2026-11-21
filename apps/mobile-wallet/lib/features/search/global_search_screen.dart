@@ -12,6 +12,7 @@ import '../markets/asset_detail_screen.dart';
 import '../perps/perps_trading_screen.dart';
 import '../send/send_screen.dart';
 import '../transactions/tx_details_screen.dart';
+import '../staking/staking_screen.dart';
 
 class GlobalSearchScreen extends StatefulWidget {
   const GlobalSearchScreen({super.key});
@@ -102,6 +103,10 @@ class _GlobalSearchScreenState extends State<GlobalSearchScreen> {
         );
         break;
       case SearchResultType.validator:
+        Navigator.of(context).pushReplacement(
+          MaterialPageRoute(builder: (_) => const StakingScreen()),
+        );
+        break;
       case SearchResultType.block:
       case SearchResultType.contract:
       case SearchResultType.discover:

@@ -42,14 +42,17 @@ class _MarketChartState extends State<MarketChart> {
       return SizedBox(
         height: widget.height,
         child: const Center(
-          child: Text('No chart data available', style: TextStyle(color: AppTheme.textMuted)),
+          child: Text('No chart data available',
+              style: TextStyle(color: AppTheme.textMuted)),
         ),
       );
     }
 
     final minPrice = widget.candles.map((c) => c.low).reduce(min);
     final maxPrice = widget.candles.map((c) => c.high).reduce(max);
-    final hoveredCandle = (_hoverIndex != null && _hoverIndex! >= 0 && _hoverIndex! < widget.candles.length)
+    final hoveredCandle = (_hoverIndex != null &&
+            _hoverIndex! >= 0 &&
+            _hoverIndex! < widget.candles.length)
         ? widget.candles[_hoverIndex!]
         : null;
 
@@ -65,30 +68,40 @@ class _MarketChartState extends State<MarketChart> {
               color: AppTheme.darkCardElevated,
               borderRadius: BorderRadius.circular(8),
             ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            child: Wrap(
+              spacing: 12,
+              runSpacing: 6,
               children: [
                 Text(
                   DateFormat('MMM dd, HH:mm').format(hoveredCandle.time),
-                  style: const TextStyle(fontSize: 11, color: AppTheme.textMuted),
+                  style:
+                      const TextStyle(fontSize: 11, color: AppTheme.textMuted),
                 ),
-                Row(
+                Wrap(
+                  spacing: 8,
+                  runSpacing: 4,
                   children: [
                     Text(
                       'O: ${Formatters.formatPrice(hoveredCandle.open, currency: widget.currency)}  ',
-                      style: const TextStyle(fontSize: 11, color: Colors.white70),
+                      style:
+                          const TextStyle(fontSize: 11, color: Colors.white70),
                     ),
                     Text(
                       'H: ${Formatters.formatPrice(hoveredCandle.high, currency: widget.currency)}  ',
-                      style: const TextStyle(fontSize: 11, color: MarketColors.gain),
+                      style: const TextStyle(
+                          fontSize: 11, color: MarketColors.gain),
                     ),
                     Text(
                       'L: ${Formatters.formatPrice(hoveredCandle.low, currency: widget.currency)}  ',
-                      style: const TextStyle(fontSize: 11, color: MarketColors.loss),
+                      style: const TextStyle(
+                          fontSize: 11, color: MarketColors.loss),
                     ),
                     Text(
                       'C: ${Formatters.formatPrice(hoveredCandle.close, currency: widget.currency)}',
-                      style: const TextStyle(fontSize: 11, fontWeight: FontWeight.w700, color: Colors.white),
+                      style: const TextStyle(
+                          fontSize: 11,
+                          fontWeight: FontWeight.w700,
+                          color: Colors.white),
                     ),
                   ],
                 ),
@@ -99,83 +112,100 @@ class _MarketChartState extends State<MarketChart> {
         // Interactive Canvas Chart
         SizedBox(
           height: widget.height,
-          child: GestureDetector(
-            onHorizontalDragUpdate: (details) {
-              final box = context.findRenderObject() as RenderBox?;
-              if (box != null) {
-                final localX = details.localPosition.dx.clamp(0.0, box.size.width);
-                final idx = ((localX / box.size.width) * (widget.candles.length - 1)).round();
-                setState(() => _hoverIndex = idx);
-              }
-            },
-            onHorizontalDragEnd: (_) => setState(() => _hoverIndex = null),
-            onTapDown: (details) {
-              final box = context.findRenderObject() as RenderBox?;
-              if (box != null) {
-                final localX = details.localPosition.dx.clamp(0.0, box.size.width);
-                final idx = ((localX / box.size.width) * (widget.candles.length - 1)).round();
-                setState(() => _hoverIndex = idx);
-              }
-            },
-            onTapUp: (_) => setState(() => _hoverIndex = null),
-            child: Stack(
-              children: [
-                CustomPaint(
-                  size: Size.infinite,
-                  painter: _ChartPainter(
-                    candles: widget.candles,
-                    mode: _mode,
-                    minPrice: minPrice,
-                    maxPrice: maxPrice,
-                    isPositive: widget.isPositive,
-                    hoverIndex: _hoverIndex,
-                  ),
-                ),
+          child: LayoutBuilder(builder: (context, constraints) {
+            void inspect(double x) {
+              if (constraints.maxWidth <= 0) return;
+              final width = constraints.maxWidth;
+              final count = widget.candles.length;
+              final index = _mode == ChartMode.candle
+                  ? (x / width * count).floor()
+                  : count == 1
+                      ? 0
+                      : ((x - min(6.0, width / 2)) /
+                              max(1.0, width - 12) *
+                              (count - 1))
+                          .round();
+              setState(() => _hoverIndex = index.clamp(0, count - 1));
+            }
 
-                // Min / Max Price labels
-                Positioned(
-                  top: 4,
-                  right: 8,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withAlpha(120),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      'H: ${Formatters.formatPrice(maxPrice, currency: widget.currency)}',
-                      style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
-                    ),
-                  ),
-                ),
-                Positioned(
-                  bottom: 4,
-                  right: 8,
-                  child: Container(
-                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                    decoration: BoxDecoration(
-                      color: Colors.black.withAlpha(120),
-                      borderRadius: BorderRadius.circular(4),
-                    ),
-                    child: Text(
-                      'L: ${Formatters.formatPrice(minPrice, currency: widget.currency)}',
-                      style: const TextStyle(fontSize: 10, color: AppTheme.textMuted),
+            return GestureDetector(
+              behavior: HitTestBehavior.opaque,
+              onHorizontalDragUpdate: (details) =>
+                  inspect(details.localPosition.dx),
+              onHorizontalDragEnd: (_) => setState(() => _hoverIndex = null),
+              onHorizontalDragCancel: () => setState(() => _hoverIndex = null),
+              onTapDown: (details) => inspect(details.localPosition.dx),
+              onTapUp: (_) => setState(() => _hoverIndex = null),
+              onTapCancel: () => setState(() => _hoverIndex = null),
+              child: ClipRect(
+                  child: Stack(
+                children: [
+                  CustomPaint(
+                    key: const ValueKey('market-chart-canvas'),
+                    size: Size.infinite,
+                    painter: _ChartPainter(
+                      candles: widget.candles,
+                      mode: _mode,
+                      minPrice: minPrice,
+                      maxPrice: maxPrice,
+                      isPositive: widget.isPositive,
+                      hoverIndex: _hoverIndex,
                     ),
                   ),
-                ),
-              ],
-            ),
-          ),
+
+                  // Min / Max Price labels
+                  Positioned(
+                    top: 4,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withAlpha(120),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        'H: ${Formatters.formatPrice(maxPrice, currency: widget.currency)}',
+                        style: const TextStyle(
+                            fontSize: 10, color: AppTheme.textMuted),
+                      ),
+                    ),
+                  ),
+                  Positioned(
+                    bottom: 4,
+                    right: 8,
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(
+                          horizontal: 6, vertical: 2),
+                      decoration: BoxDecoration(
+                        color: Colors.black.withAlpha(120),
+                        borderRadius: BorderRadius.circular(4),
+                      ),
+                      child: Text(
+                        'L: ${Formatters.formatPrice(minPrice, currency: widget.currency)}',
+                        style: const TextStyle(
+                            fontSize: 10, color: AppTheme.textMuted),
+                      ),
+                    ),
+                  ),
+                ],
+              )),
+            );
+          }),
         ),
 
         if (widget.showControls) ...[
           const SizedBox(height: 12),
           // Timeframe and Mode controls
-          Row(
-            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+          Wrap(
+            alignment: WrapAlignment.spaceBetween,
+            spacing: 12,
+            runSpacing: 8,
             children: [
               // Timeframe Buttons
-              Row(
+              Wrap(
+                spacing: 0,
+                runSpacing: 6,
                 children: ChartTimeframe.values.map((tf) {
                   final isSelected = tf == widget.selectedTimeframe;
                   return Padding(
@@ -184,12 +214,17 @@ class _MarketChartState extends State<MarketChart> {
                       onTap: () => widget.onTimeframeChanged(tf),
                       borderRadius: BorderRadius.circular(8),
                       child: Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                        padding: const EdgeInsets.symmetric(
+                            horizontal: 10, vertical: 6),
                         decoration: BoxDecoration(
-                          color: isSelected ? AppTheme.primaryCyan.withAlpha(40) : Colors.transparent,
+                          color: isSelected
+                              ? AppTheme.primaryCyan.withAlpha(40)
+                              : Colors.transparent,
                           borderRadius: BorderRadius.circular(8),
                           border: Border.all(
-                            color: isSelected ? AppTheme.primaryCyan : Colors.transparent,
+                            color: isSelected
+                                ? AppTheme.primaryCyan
+                                : Colors.transparent,
                             width: 1,
                           ),
                         ),
@@ -197,8 +232,11 @@ class _MarketChartState extends State<MarketChart> {
                           tf.label,
                           style: TextStyle(
                             fontSize: 12,
-                            fontWeight: isSelected ? FontWeight.w800 : FontWeight.w500,
-                            color: isSelected ? AppTheme.primaryCyan : AppTheme.textMuted,
+                            fontWeight:
+                                isSelected ? FontWeight.w800 : FontWeight.w500,
+                            color: isSelected
+                                ? AppTheme.primaryCyan
+                                : AppTheme.textMuted,
                           ),
                         ),
                       ),
@@ -214,17 +252,25 @@ class _MarketChartState extends State<MarketChart> {
                   borderRadius: BorderRadius.circular(8),
                 ),
                 child: Row(
+                  mainAxisSize: MainAxisSize.min,
                   children: [
                     IconButton(
+                      tooltip: 'Line chart',
                       icon: const Icon(Icons.show_chart, size: 18),
-                      color: _mode == ChartMode.line ? AppTheme.primaryCyan : AppTheme.textMuted,
+                      color: _mode == ChartMode.line
+                          ? AppTheme.primaryCyan
+                          : AppTheme.textMuted,
                       padding: const EdgeInsets.all(6),
                       constraints: const BoxConstraints(),
                       onPressed: () => setState(() => _mode = ChartMode.line),
                     ),
                     IconButton(
-                      icon: const Icon(Icons.candlestick_chart_outlined, size: 18),
-                      color: _mode == ChartMode.candle ? AppTheme.primaryCyan : AppTheme.textMuted,
+                      tooltip: 'Candlestick chart',
+                      icon: const Icon(Icons.candlestick_chart_outlined,
+                          size: 18),
+                      color: _mode == ChartMode.candle
+                          ? AppTheme.primaryCyan
+                          : AppTheme.textMuted,
                       padding: const EdgeInsets.all(6),
                       constraints: const BoxConstraints(),
                       onPressed: () => setState(() => _mode = ChartMode.candle),
@@ -259,10 +305,31 @@ class _ChartPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    if (candles.isEmpty) return;
+    if (candles.isEmpty ||
+        size.isEmpty ||
+        !size.width.isFinite ||
+        !size.height.isFinite) {
+      return;
+    }
+
+    canvas.save();
+    canvas.clipRect(Offset.zero & size);
 
     final priceRange = (maxPrice - minPrice == 0) ? 1.0 : (maxPrice - minPrice);
-    final stepX = size.width / max(1, candles.length - 1);
+    // Each candle owns a complete slot, including the first and last bodies.
+    final slotWidth = size.width / candles.length;
+    final inset = min(6.0, size.width / 2);
+    double xAt(int index) => mode == ChartMode.candle
+        ? (index + 0.5) * slotWidth
+        : candles.length == 1
+            ? size.width / 2
+            : inset + index * (size.width - 2 * inset) / (candles.length - 1);
+    final verticalInset = min(10.0, size.height / 2);
+    double yAt(double price) =>
+        size.height -
+        verticalInset -
+        ((price - minPrice) / priceRange).clamp(0.0, 1.0) *
+            (size.height - 2 * verticalInset);
 
     // Draw Subtle Grid Lines
     final gridPaint = Paint()
@@ -279,8 +346,8 @@ class _ChartPainter extends CustomPainter {
       final fillPath = Path();
 
       for (int i = 0; i < candles.length; i++) {
-        final x = i * stepX;
-        final y = size.height - ((candles[i].close - minPrice) / priceRange * (size.height - 20) + 10);
+        final x = xAt(i);
+        final y = yAt(candles[i].close);
 
         if (i == 0) {
           path.moveTo(x, y);
@@ -306,7 +373,8 @@ class _ChartPainter extends CustomPainter {
         end: Alignment.bottomCenter,
       );
       final fillPaint = Paint()
-        ..shader = fillGradient.createShader(Rect.fromLTWH(0, 0, size.width, size.height))
+        ..shader = fillGradient
+            .createShader(Rect.fromLTWH(0, 0, size.width, size.height))
         ..style = PaintingStyle.fill;
       canvas.drawPath(fillPath, fillPaint);
 
@@ -320,18 +388,18 @@ class _ChartPainter extends CustomPainter {
       canvas.drawPath(path, strokePaint);
     } else {
       // Candlestick Mode
-      final candleWidth = max(2.0, (stepX * 0.7));
+      final candleWidth = min(12.0, slotWidth * 0.7);
 
       for (int i = 0; i < candles.length; i++) {
         final c = candles[i];
-        final x = i * stepX;
+        final x = xAt(i);
         final isBull = c.isBullish;
         final color = isBull ? MarketColors.gain : MarketColors.loss;
 
-        final openY = size.height - ((c.open - minPrice) / priceRange * (size.height - 20) + 10);
-        final closeY = size.height - ((c.close - minPrice) / priceRange * (size.height - 20) + 10);
-        final highY = size.height - ((c.high - minPrice) / priceRange * (size.height - 20) + 10);
-        final lowY = size.height - ((c.low - minPrice) / priceRange * (size.height - 20) + 10);
+        final openY = yAt(c.open);
+        final closeY = yAt(c.close);
+        final highY = yAt(c.high);
+        final lowY = yAt(c.low);
 
         // Draw Wick
         final wickPaint = Paint()
@@ -356,10 +424,12 @@ class _ChartPainter extends CustomPainter {
     }
 
     // Draw Crosshair if hovering
-    if (hoverIndex != null && hoverIndex! >= 0 && hoverIndex! < candles.length) {
-      final hX = hoverIndex! * stepX;
+    if (hoverIndex != null &&
+        hoverIndex! >= 0 &&
+        hoverIndex! < candles.length) {
+      final hX = xAt(hoverIndex!);
       final candle = candles[hoverIndex!];
-      final hY = size.height - ((candle.close - minPrice) / priceRange * (size.height - 20) + 10);
+      final hY = yAt(candle.close);
 
       final crosshairPaint = Paint()
         ..color = Colors.white54
@@ -370,15 +440,20 @@ class _ChartPainter extends CustomPainter {
       canvas.drawLine(Offset(0, hY), Offset(size.width, hY), crosshairPaint);
 
       // Touch Point Dot
-      canvas.drawCircle(Offset(hX, hY), 5, Paint()..color = AppTheme.primaryCyan);
+      canvas.drawCircle(
+          Offset(hX, hY), 5, Paint()..color = AppTheme.primaryCyan);
       canvas.drawCircle(Offset(hX, hY), 2, Paint()..color = Colors.white);
     }
+    canvas.restore();
   }
 
   @override
   bool shouldRepaint(covariant _ChartPainter oldDelegate) {
     return oldDelegate.candles != candles ||
         oldDelegate.mode != mode ||
-        oldDelegate.hoverIndex != hoverIndex;
+        oldDelegate.hoverIndex != hoverIndex ||
+        oldDelegate.minPrice != minPrice ||
+        oldDelegate.maxPrice != maxPrice ||
+        oldDelegate.isPositive != isPositive;
   }
 }

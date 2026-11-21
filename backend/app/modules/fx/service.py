@@ -4,10 +4,12 @@ Fetches USD-based fiat conversion rates and caches in Redis.
 Never conflates fiat rates with blockchain state.
 """
 from __future__ import annotations
+
 import httpx
+
 from app.core.config import settings
-from app.db.redis import redis_get, redis_set, TTL_FX
 from app.core.logging import logger
+from app.db.redis import TTL_FX, redis_get, redis_set
 
 SUPPORTED_CURRENCIES = ["USD", "INR", "EUR", "GBP", "JPY"]
 

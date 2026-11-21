@@ -66,6 +66,45 @@ impl FaucetServer {
 
         Ok(())
     }
+
+    /// Runs the Faucet HTTP Server in the foreground until termination.
+    pub async fn run(
+        faucet: Arc<FaucetService>,
+        ledger: Arc<parking_lot::RwLock<ChainLedger<RedbStore>>>,
+        port: u16,
+    ) -> Result<(), String> {
+        let state = FaucetServerState { faucet, ledger };
+
+        let cors = CorsLayer::new()
+            .allow_origin(Any)
+            .allow_methods(vec![Method::GET, Method::POST, Method::OPTIONS])
+            .allow_headers(vec![
+                header::CONTENT_TYPE,
+                header::AUTHORIZATION,
+                header::ACCEPT,
+            ]);
+
+        let app = Router::new()
+            .route("/health", get(handle_health))
+            .route("/stats", get(handle_stats))
+            .route("/claim", post(handle_claim))
+            .layer(cors)
+            .with_state(state);
+
+        let addr = SocketAddr::from(([0, 0, 0, 0], port));
+        let listener = tokio::net::TcpListener::bind(addr)
+            .await
+            .map_err(|e| format!("failed to bind faucet server on {addr}: {e}"))?;
+
+        info!("SPRX Faucet HTTP Server listening on http://0.0.0.0:{port}");
+
+        axum::serve(
+            listener,
+            app.into_make_service_with_connect_info::<SocketAddr>(),
+        )
+        .await
+        .map_err(|e| format!("faucet server error: {e}"))
+    }
 }
 
 async fn handle_health(State(state): State<FaucetServerState>) -> impl IntoResponse {
@@ -106,12 +145,20 @@ async fn handle_claim(
         now,
     ) {
         Ok(claim_res) => (StatusCode::OK, Json(json!(claim_res))),
-        Err(e) => (
-            StatusCode::BAD_REQUEST,
-            Json(json!({
-                "success": false,
-                "error": e.to_string(),
-            })),
-        ),
+        Err(e) => {
+            let status = match e {
+                crate::error::FaucetError::RateLimitExceeded { .. } => {
+                    StatusCode::TOO_MANY_REQUESTS
+                }
+                _ => StatusCode::BAD_REQUEST,
+            };
+            (
+                status,
+                Json(json!({
+                    "success": false,
+                    "error": e.to_string(),
+                })),
+            )
+        }
     }
 }

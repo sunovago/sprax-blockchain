@@ -1,3 +1,6 @@
+pub(crate) mod contract;
+pub(crate) mod db;
+pub(crate) mod faucet;
 pub(crate) mod init;
 pub(crate) mod keys;
 pub(crate) mod query;

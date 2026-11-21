@@ -1,17 +1,21 @@
 import asyncio
-from app.workers.celery_app import celery_app
+from datetime import UTC
+
 from app.core.logging import logger
+from app.workers.celery_app import celery_app
 
 
 @celery_app.task(name="app.workers.tasks.price_alerts.check_price_alerts", bind=True)
 def check_price_alerts(self):
     """Check active price alerts against current market prices."""
     async def _run():
+        from datetime import datetime
+
         from sqlalchemy import select
+
+        from app.db.models.notification import Notification, PriceAlert
         from app.db.session import async_session_factory
-        from app.db.models.notification import PriceAlert, Notification
         from app.modules.markets.service import get_market_service
-        from datetime import datetime, timezone
 
         svc = get_market_service()
         markets = await svc.get_markets()
@@ -34,7 +38,7 @@ def check_price_alerts(self):
                     (alert.condition == "below" and current_f <= target_f)
                 )
                 if triggered:
-                    alert.triggered_at = datetime.now(timezone.utc)
+                    alert.triggered_at = datetime.now(UTC)
                     alert.is_active = False
                     notif = Notification(
                         user_id=alert.user_id,

@@ -1,0 +1,9 @@
+{
+  "moniker": "val-sec-council",
+  "operatorAddress": "sprax105tnk6cwcm277dknhdngp8ejqff5jw6nty4s9g",
+  "valoperAddress": "spraxvaloper105tnk6cwcm277dknhdngp8ejqff5jw6np3paxr",
+  "consensusPubkey": "0xf81f45bbb8655d59727a82285310c29a5ada8cd5430882983198418bd02ea194",
+  "selfStakeSprx": "100000",
+  "commissionRate": "0.05",
+  "generatedAt": "GenesisCeremony-Phase1"
+}

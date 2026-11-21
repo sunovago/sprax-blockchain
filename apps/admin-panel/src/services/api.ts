@@ -17,6 +17,12 @@ import {
   AuditLogItem,
   SystemAnnouncementItem,
   AdminUser,
+  TapMiningDashboard,
+  TapMiningPlayer,
+  TapMiningPlayerDetail,
+  TapMiningTask,
+  TapMiningClaim,
+  FaucetStatus,
 } from '../types';
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL || '/api/v1';
@@ -213,6 +219,91 @@ class ApiClient {
     return this.request('/admin/admins', {
       method: 'POST',
       body: JSON.stringify(data),
+    });
+  }
+
+  // Tap Mining
+  async getTapMiningDashboard(): Promise<TapMiningDashboard> {
+    return this.request('/admin/tap-mining/dashboard');
+  }
+
+  async getTapMiningPlayers(search?: string): Promise<{ total: number; players: TapMiningPlayer[] }> {
+    const query = search ? `?search=${encodeURIComponent(search)}` : '';
+    return this.request(`/admin/tap-mining/players${query}`);
+  }
+
+  async getTapMiningPlayer(telegramId: number): Promise<TapMiningPlayerDetail> {
+    return this.request(`/admin/tap-mining/players/${telegramId}`);
+  }
+
+  async banTapMiningPlayer(telegramId: number): Promise<{ telegram_id: number; is_banned: boolean }> {
+    return this.request(`/admin/tap-mining/players/${telegramId}/ban`, { method: 'POST' });
+  }
+
+  async unbanTapMiningPlayer(telegramId: number): Promise<{ telegram_id: number; is_banned: boolean }> {
+    return this.request(`/admin/tap-mining/players/${telegramId}/unban`, { method: 'POST' });
+  }
+
+  async adjustTapMiningPlayer(
+    telegramId: number,
+    data: { points_delta: number; energy_delta: number; reason: string },
+  ): Promise<{ telegram_id: number; points: number; energy: number }> {
+    return this.request(`/admin/tap-mining/players/${telegramId}/adjust`, {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getTapMiningTasks(): Promise<TapMiningTask[]> {
+    return this.request('/admin/tap-mining/tasks');
+  }
+
+  async createTapMiningTask(data: {
+    title: string;
+    description?: string;
+    task_type: string;
+    reward_points: number;
+    action_url?: string;
+    verify_target?: string;
+    verify_value?: number;
+    is_active?: boolean;
+    sort_order?: number;
+  }): Promise<TapMiningTask> {
+    return this.request('/admin/tap-mining/tasks', {
+      method: 'POST',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async updateTapMiningTask(id: string, data: Partial<TapMiningTask>): Promise<TapMiningTask> {
+    return this.request(`/admin/tap-mining/tasks/${id}`, {
+      method: 'PATCH',
+      body: JSON.stringify(data),
+    });
+  }
+
+  async getTapMiningClaims(params?: {
+    status?: string;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<{ total: number; claims: TapMiningClaim[] }> {
+    const q = new URLSearchParams();
+    if (params?.status) q.set('status', params.status);
+    if (params?.search) q.set('search', params.search);
+    if (params?.limit) q.set('limit', String(params.limit));
+    if (params?.offset) q.set('offset', String(params.offset));
+    const qs = q.toString() ? `?${q.toString()}` : '';
+    return this.request(`/admin/tap-mining/claims${qs}`);
+  }
+
+  async getFaucetStatus(): Promise<FaucetStatus> {
+    return this.request('/admin/tap-mining/faucet/status');
+  }
+
+  async retryTapMiningClaim(claimId: string): Promise<{ status: string; tx_hash: string | null }> {
+    return this.request(`/admin/tap-mining/claims/${claimId}/retry`, {
+      method: 'POST',
     });
   }
 }

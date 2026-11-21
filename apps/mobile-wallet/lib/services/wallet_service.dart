@@ -30,7 +30,7 @@ class WalletService extends ChangeNotifier {
   bool _isLoading = false;
   String? _mnemonic;
 
-  NetworkConfig _currentNetwork = AppConstants.testnet;
+  NetworkConfig _currentNetwork = AppConstants.devnet;
   FiatCurrency _selectedCurrency = FiatCurrency.inr;
 
   List<WalletAccount> _accounts = [];
@@ -76,7 +76,7 @@ class WalletService extends ChangeNotifier {
         if (savedChainId != null) {
           _currentNetwork = AppConstants.supportedNetworks.firstWhere(
             (n) => n.chainId == savedChainId,
-            orElse: () => AppConstants.testnet,
+            orElse: () => AppConstants.devnet,
           );
         }
 
@@ -188,6 +188,14 @@ class WalletService extends ChangeNotifier {
       _nonce = accInfo.nonce;
       _validators = await _rpc.getValidators(_currentNetwork.rpcUrl);
       await _market.fetchLatestMarketPrice();
+
+      // Fetch real on-chain transaction history
+      final onChainTxs = await _rpc.fetchRecentOnChainTransactions(_currentNetwork.rpcUrl, activeAccount!.address);
+      for (final tx in onChainTxs) {
+        if (!_transactions.any((t) => t.txHash == tx.txHash)) {
+          _transactions.add(tx);
+        }
+      }
     } catch (_) {
       // Offline fallback
     } finally {

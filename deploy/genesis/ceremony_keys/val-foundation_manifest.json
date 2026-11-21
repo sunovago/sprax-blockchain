@@ -1,0 +1,9 @@
+{
+  "moniker": "val-foundation",
+  "operatorAddress": "sprax1l9uzwsc6jpdvq6452sd35yc0ec4cyf705g0nhv",
+  "valoperAddress": "spraxvaloper1l9uzwsc6jpdvq6452sd35yc0ec4cyf707am758",
+  "consensusPubkey": "0xfda8e190066ddaa8347431b7dee348d21b021b97a9f03c59dfee911ef604aecb",
+  "selfStakeSprx": "100000",
+  "commissionRate": "0.05",
+  "generatedAt": "GenesisCeremony-Phase1"
+}

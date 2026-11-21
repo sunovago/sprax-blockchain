@@ -21,12 +21,18 @@ enum Commands {
     Start(commands::start::StartArgs),
     /// Key management and derivation utilities
     Keys(commands::keys::KeysArgs),
+    /// Database and ledger snapshot, recovery, and index rebuild utilities
+    Db(commands::db::DbArgs),
     /// Submit transactions to the local chain
     Tx(commands::tx::TxArgs),
+    /// Store, instantiate, execute, or query WASM contracts via a running node
+    Contract(commands::contract::ContractArgs),
     /// Query blockchain state, balances, blocks, and transaction receipts
     Query(commands::query::QueryArgs),
     /// Query local node status and configuration
     Status(commands::status::StatusArgs),
+    /// Faucet daemon and token request utilities
+    Faucet(commands::faucet::FaucetArgs),
     /// Print binary version and build metadata
     Version(commands::version::VersionArgs),
 }
@@ -39,9 +45,12 @@ async fn main() -> anyhow::Result<()> {
         Commands::Init(args) => commands::init::execute(&args),
         Commands::Start(args) => commands::start::execute(&args).await,
         Commands::Keys(args) => commands::keys::execute(&args),
+        Commands::Db(args) => commands::db::execute(&args),
         Commands::Tx(args) => commands::tx::execute(&args),
+        Commands::Contract(args) => commands::contract::execute(&args),
         Commands::Query(args) => commands::query::execute(&args),
         Commands::Status(args) => commands::status::execute(&args),
+        Commands::Faucet(args) => commands::faucet::execute(&args).await,
         Commands::Version(args) => commands::version::execute(&args),
     }
 }

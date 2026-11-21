@@ -1,0 +1,73 @@
+{
+  "chain_id": "sprax-devnet-1",
+  "genesis_time_unix_secs": 1700000000,
+  "initial_height": 0,
+  "consensus_params": {
+    "block_time_target_ms": 1500,
+    "max_block_gas": 20000000,
+    "max_block_size_bytes": 4194304,
+    "min_gas_price_atto": 1000000000,
+    "initial_block_reward": "2000000000000000000",
+    "halving_interval_blocks": 84096000,
+    "max_supply": "1500000000000000000000000000",
+    "unbonding_period_blocks": 10
+  },
+  "accounts": [
+    {
+      "name": "alice",
+      "address": "sprax1sdtp4kee3lv8lrn7mqe3hle0ew29wv7vl380gr",
+      "initial_balance": "1000000000000000000000000"
+    },
+    {
+      "name": "bob",
+      "address": "sprax1rmkjnvt9f772j3shqpxhj6wlc3jjk8eswe4gkz",
+      "initial_balance": "500000000000000000000000"
+    },
+    {
+      "name": "charlie",
+      "address": "sprax1nsuq6mh7ctkrjvsaslgyynl2sw8h225y9apaar",
+      "initial_balance": "100000000000000000000000"
+    }
+  ],
+  "validators": [
+    {
+      "operator_address": "sprax1sdtp4kee3lv8lrn7mqe3hle0ew29wv7vl380gr",
+      "consensus_pubkey": [
+        138,
+        136,
+        227,
+        221,
+        116,
+        9,
+        241,
+        149,
+        253,
+        82,
+        219,
+        45,
+        60,
+        186,
+        93,
+        114,
+        202,
+        103,
+        9,
+        191,
+        29,
+        148,
+        18,
+        27,
+        243,
+        116,
+        136,
+        1,
+        180,
+        15,
+        111,
+        92
+      ],
+      "self_stake": "100000000000000000000000",
+      "moniker": "alice"
+    }
+  ]
+}

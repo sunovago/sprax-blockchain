@@ -167,7 +167,7 @@ export class ExplorerApiService {
    */
   public async getBlocks(limit = 20, offset = 0): Promise<PaginatedResponse<IndexedBlock>> {
     const data = await this.fetchJson<PaginatedResponse<IndexedBlock>>(
-      `/blocks?limit=${limit}&offset=${offset}`
+      `/explorer/blocks?limit=${limit}&offset=${offset}`
     );
     if (data && data.items && data.items.length > 0) {
       this.offline = false;
@@ -217,7 +217,7 @@ export class ExplorerApiService {
    */
   public async getBlock(heightOrHash: string | number): Promise<IndexedBlock | null> {
     const identifier = String(heightOrHash).trim();
-    const data = await this.fetchJson<IndexedBlock>(`/blocks/${identifier}`);
+    const data = await this.fetchJson<IndexedBlock>(`/explorer/blocks/${identifier}`);
     if (data) {
       this.offline = false;
       return data;
@@ -273,7 +273,7 @@ export class ExplorerApiService {
    */
   public async getTransactions(limit = 20, offset = 0): Promise<PaginatedResponse<IndexedTx>> {
     const data = await this.fetchJson<PaginatedResponse<IndexedTx>>(
-      `/txs?limit=${limit}&offset=${offset}`
+      `/explorer/transactions?limit=${limit}&offset=${offset}`
     );
     if (data && data.items && data.items.length > 0) return data;
 
@@ -384,7 +384,7 @@ export class ExplorerApiService {
   ): Promise<PaginatedResponse<IndexedTx>> {
     const cleanAddr = address.trim();
     const data = await this.fetchJson<PaginatedResponse<IndexedTx>>(
-      `/addresses/${cleanAddr}/txs?limit=${limit}&offset=${offset}`
+      `/explorer/addresses/${cleanAddr}/transactions?limit=${limit}&offset=${offset}`
     );
     if (data && data.items && data.items.length > 0) return data;
 
@@ -466,14 +466,48 @@ export class ExplorerApiService {
    * Fetches contracts
    */
   public async getContracts(): Promise<SmartContract[]> {
-    return MOCK_GENESIS_CONTRACTS;
+    let localContracts: SmartContract[] = [];
+    try {
+      const stored = localStorage.getItem("sprx_verified_contracts");
+      if (stored) {
+        localContracts = JSON.parse(stored);
+      }
+    } catch {
+      // ignore
+    }
+
+    const map = new Map<string, SmartContract>();
+    for (const c of localContracts) {
+      map.set(c.address.toLowerCase(), c);
+    }
+    for (const c of MOCK_GENESIS_CONTRACTS) {
+      if (!map.has(c.address.toLowerCase())) {
+        map.set(c.address.toLowerCase(), c);
+      }
+    }
+    return Array.from(map.values());
+  }
+
+  /**
+   * Saves or updates a verified contract in local storage cache
+   */
+  public saveContract(contract: SmartContract): void {
+    try {
+      const existing = localStorage.getItem("sprx_verified_contracts");
+      const list: SmartContract[] = existing ? JSON.parse(existing) : [];
+      const updated = [contract, ...list.filter((c) => c.address.toLowerCase() !== contract.address.toLowerCase())];
+      localStorage.setItem("sprx_verified_contracts", JSON.stringify(updated));
+    } catch {
+      // ignore
+    }
   }
 
   /**
    * Fetches single contract
    */
   public async getContract(address: string): Promise<SmartContract | null> {
-    const found = MOCK_GENESIS_CONTRACTS.find(
+    const all = await this.getContracts();
+    const found = all.find(
       (c) => c.address.toLowerCase() === address.trim().toLowerCase()
     );
     if (found) return found;
@@ -495,15 +529,42 @@ export class ExplorerApiService {
   /**
    * Ecosystem projects
    */
+  public ecosystemIsPreview = false;
+  public marketsArePreview = false;
+
   public async getEcosystemProjects(): Promise<EcosystemProject[]> {
-    return MOCK_ECOSYSTEM_PROJECTS;
+    const result = await this.fetchJson<{ data?: { sprax_ecosystem?: Record<string, unknown>[] } }>("/discover");
+    const rows = result?.data?.sprax_ecosystem;
+    this.ecosystemIsPreview = !Array.isArray(rows);
+    if (!Array.isArray(rows)) return MOCK_ECOSYSTEM_PROJECTS;
+    const categories: EcosystemProject["category"][] = ["DeFi", "RWA & Payments", "Wallets", "Infrastructure", "Enterprise", "Gaming & Identity"];
+    return rows.map(row => ({
+      id: String(row.id), name: String(row.name ?? "Unnamed project"),
+      tagline: String(row.tag ?? ""), description: String(row.description ?? ""),
+      category: categories.find(c => c.toLowerCase() === String(row.category).toLowerCase()) ?? "Infrastructure",
+      stage: "Listed", verified: row.is_verified === true,
+      website: String(row.website_url ?? ""),
+    }));
   }
 
   /**
    * Market assets
    */
   public async getMarketAssets(): Promise<MarketAsset[]> {
-    return MOCK_MARKET_ASSETS;
+    const result = await this.fetchJson<{ data?: Record<string, unknown>[] }>("/markets");
+    const rows = result?.data;
+    this.marketsArePreview = !Array.isArray(rows);
+    if (!Array.isArray(rows)) return MOCK_MARKET_ASSETS;
+    const numeric = (value: unknown) => Number.isFinite(Number(value)) ? Number(value) : 0;
+    return rows.map(row => ({
+      id: String(row.id ?? row.symbol), symbol: String(row.symbol ?? ""), name: String(row.name ?? ""),
+      priceUsd: numeric(row.price_usd), change24h: numeric(row.price_change_pct_24h),
+      high24h: numeric(row.high_24h), low24h: numeric(row.low_24h),
+      volume24hUsd: numeric(row.volume_24h), marketCapUsd: numeric(row.market_cap),
+      circulatingSupply: String(row.circulating_supply ?? ""),
+      sparkline: Array.isArray(row.sparkline) ? row.sparkline.map(numeric) : [],
+      category: "Native",
+    }));
   }
 
   /**

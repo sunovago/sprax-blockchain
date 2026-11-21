@@ -1,5 +1,5 @@
 # Multi-stage Docker build for SPRX Blockchain Node
-FROM rust:1.80-slim AS builder
+FROM rust:1.88.0-slim-bookworm AS builder
 
 WORKDIR /usr/src/sprax-chain
 
@@ -11,7 +11,7 @@ COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates ./crates
 
 # Build release binaries
-RUN cargo build --release -p sprax-cli
+RUN cargo build --release -p sprax-cli --locked
 
 # Runtime stage
 FROM debian:bookworm-slim

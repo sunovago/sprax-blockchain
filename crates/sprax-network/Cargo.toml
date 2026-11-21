@@ -22,6 +22,8 @@ tokio.workspace = true
 parking_lot.workspace = true
 tracing.workspace = true
 bytes.workspace = true
+snow.workspace = true
+zeroize.workspace = true
 
 [dev-dependencies]
 sprax-core.workspace = true

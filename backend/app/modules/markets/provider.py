@@ -3,9 +3,12 @@ Market provider abstraction.
 Supports CoinGecko as primary provider with clean interface for future providers.
 """
 from __future__ import annotations
+
 from abc import ABC, abstractmethod
-from typing import Any
+from typing import ClassVar
+
 import httpx
+
 from app.core.config import settings
 from app.core.logging import logger
 
@@ -30,7 +33,7 @@ class CoinGeckoProvider(MarketProvider):
     """CoinGecko market data provider."""
 
     # Maps SPRX ecosystem symbols to CoinGecko IDs
-    SYMBOL_TO_ID: dict[str, str] = {
+    SYMBOL_TO_ID: ClassVar[dict[str, str]] = {
         "BTC": "bitcoin",
         "ETH": "ethereum",
         "SOL": "solana",

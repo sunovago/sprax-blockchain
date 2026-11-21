@@ -20,6 +20,7 @@ import { OperationsPage } from './pages/OperationsPage';
 import { SecurityAdminsPage } from './pages/SecurityAdminsPage';
 import { AuditLogsPage } from './pages/AuditLogsPage';
 import { FeatureFlagsPage } from './pages/FeatureFlagsPage';
+import { TapMiningPage } from './pages/TapMiningPage';
 
 export const App: React.FC = () => {
   const { isAuthenticated, isLoading } = useAuth();
@@ -78,6 +79,8 @@ export const App: React.FC = () => {
         return <AuditLogsPage />;
       case 'feature_flags':
         return <FeatureFlagsPage />;
+      case 'tap_mining':
+        return <TapMiningPage />;
       default:
         return <DashboardPage />;
     }

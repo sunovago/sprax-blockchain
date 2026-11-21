@@ -1,9 +1,10 @@
-from fastapi import APIRouter, Query, HTTPException
-from app.modules.markets.service import get_market_service
-from app.modules.fx.service import get_fx_service
-from app.core.response import ApiResponse
+from fastapi import APIRouter, Query
+
+from app.core.exceptions import MARKET_NOT_FOUND, SpraxError
 from app.core.feature_flags import is_enabled
-from app.core.exceptions import SpraxError, MARKET_NOT_FOUND
+from app.core.response import ApiResponse
+from app.modules.fx.service import get_fx_service
+from app.modules.markets.service import get_market_service
 
 router = APIRouter()
 

@@ -1,15 +1,23 @@
+pub mod account;
 pub mod address;
 pub mod amount;
 pub mod block;
+pub mod canonical;
 pub mod chain_id;
 pub mod error;
+pub mod evidence;
 pub mod hash;
 pub mod transaction;
+pub mod validator;
 
+pub use account::{account_key, supply_key, AccountState, SupplyState};
 pub use address::{Address, ADDRESS_HRP, ADDRESS_LENGTH};
 pub use amount::{Amount, ATTO_SPRX_PER_SPRX, NANO_SPRX_PER_SPRX};
 pub use block::{Block, BlockBody, BlockHeader, CommitSignature};
+pub use canonical::to_canonical_json_bytes;
 pub use chain_id::ChainId;
 pub use error::TypeError;
+pub use evidence::{EquivocationEvidence, Vote, VoteType};
 pub use hash::Hash32;
-pub use transaction::{KeyType, Transaction, TxBody, TxFee, TxMessage, TxReceipt};
+pub use transaction::{ContractEvent, KeyType, Transaction, TxBody, TxFee, TxMessage, TxReceipt};
+pub use validator::CanonicalValidator;

@@ -16,6 +16,7 @@ import {
   ToggleLeft,
   ChevronRight,
   Radio,
+  Gamepad2,
 } from 'lucide-react';
 import { useAuth } from '../../context/AuthContext';
 
@@ -42,6 +43,7 @@ export const navItems: NavItem[] = [
   { id: 'validators', label: 'Validators', icon: ShieldCheck, section: 'Consensus', permission: 'validators.read' },
   { id: 'staking', label: 'Staking Overview', icon: Coins, section: 'Consensus', permission: 'staking.read' },
   { id: 'perps_risk', label: 'Perps Risk Monitor', icon: Activity, section: 'Perps', badge: 'TESTNET', permission: 'perps.read' },
+  { id: 'tap_mining', label: 'Tap Mining', icon: Gamepad2, section: 'Games' },
   { id: 'notifications', label: 'Announcements', icon: Bell, section: 'Operations', permission: 'notifications.read' },
   { id: 'operations', label: 'System Operations', icon: Activity, section: 'Operations', permission: 'operations.read' },
   { id: 'security_admins', label: 'Admin Users & RBAC', icon: ShieldAlert, section: 'Security', permission: 'admin.manage' },

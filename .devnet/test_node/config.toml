@@ -1,0 +1,39 @@
+environment = "Development"
+chain_id = "sprax-devnet-1"
+home_dir = ".devnet/test_node"
+
+[network]
+role = "FullNode"
+listen_addr = "0.0.0.0"
+p2p_port = 26656
+max_inbound_peers = 40
+max_outbound_peers = 20
+bootstrap_peers = []
+enable_nat_upnp = true
+max_message_size_bytes = 4194304
+
+[rpc]
+enable_json_rpc = true
+enable_grpc = true
+json_rpc_port = 26657
+grpc_port = 9090
+max_request_body_bytes = 5242880
+
+[pruning.KeepRecent]
+keep_blocks = 100000
+
+[telemetry]
+enable_metrics = true
+prometheus_port = 26660
+log_level = "info"
+log_format_json = false
+
+[consensus]
+enabled = true
+local_validator_key_name = "alice"
+
+[consensus.timeouts]
+timeout_propose_ms = 1000
+timeout_prevote_ms = 500
+timeout_precommit_ms = 500
+timeout_commit_ms = 500

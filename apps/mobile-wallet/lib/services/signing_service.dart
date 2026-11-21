@@ -1,6 +1,5 @@
 import 'dart:convert';
 import 'dart:typed_data';
-import 'package:crypto/crypto.dart' as crypto;
 import '../core/utils/crypto_utils.dart';
 
 class SigningService {
@@ -17,31 +16,33 @@ class SigningService {
     required Uint8List publicKeyBytes,
     String memo = "SPRX Mobile Wallet Transfer",
   }) {
-    // 1. Construct canonical TxBody
+    // 1. Construct canonical TxBody matching Sprax Protocol
     final txBody = {
       "chain_id": chainId,
       "sender": senderAddress,
       "nonce": nonce,
       "messages": [
         {
-          "type": "transfer",
-          "to": recipientAddress,
-          "amount": amountAtto.toString(),
+          "Transfer": {
+            "to": recipientAddress,
+            "amount": amountAtto.toString(),
+          }
         }
       ],
       "fee": {
         "amount": feeAtto.toString(),
-        "gas_limit": 100000,
+        "gas_limit": 200000,
+        "priority_fee": "0",
       },
       "memo": memo,
       "timeout_height": timeoutHeight,
     };
 
-    // 2. Canonical serialization for sign bytes: Blake3/SHA256 of JSON string
+    // 2. Canonical serialization for sign bytes: exact UTF-8 JSON bytes matching node serde_json
     final bodyJsonStr = jsonEncode(txBody);
-    final signBytes = Uint8List.fromList(crypto.sha256.convert(utf8.encode(bodyJsonStr)).bytes);
+    final signBytes = Uint8List.fromList(utf8.encode(bodyJsonStr));
 
-    // 3. Local offline Ed25519 signature
+    // 3. Local offline Ed25519 signature directly over signBytes
     final signature = CryptoUtils.signBytes(privateKeyBytes, signBytes);
 
     // 4. Return canonical signed Transaction payload

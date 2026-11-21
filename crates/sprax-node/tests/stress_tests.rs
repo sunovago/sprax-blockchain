@@ -79,7 +79,8 @@ fn test_stress_high_tx_throughput_and_balance_invariants() {
     assert_eq!(total_sent, 100);
     assert_eq!(ledger.height(), 5);
 
-    // Verify Invariant: Total supply is conserved (minus standard burned/collected fees)
+    // Verify Invariant: Total supply is conserved, accounting for both standard burned/collected
+    // fees and the block rewards minted to the proposer (keypairs[0]) across the 5 mined blocks.
     let mut total_balance_atto: u128 = 0;
     for kp in &keypairs {
         let acc = ledger.get_account(&kp.address()).unwrap();
@@ -88,7 +89,19 @@ fn test_stress_high_tx_throughput_and_balance_invariants() {
 
     let initial_supply_atto = 20 * 100_000 * 1_000_000_000_000_000_000u128;
     let total_fees_atto = 100 * TxFee::default().amount.as_atto();
-    assert_eq!(total_balance_atto + total_fees_atto, initial_supply_atto);
+    let block_reward_atto = GenesisConfig::default_development()
+        .consensus_params
+        .block_reward_at_height(1)
+        .as_atto();
+    let total_minted_atto = 5 * block_reward_atto;
+    assert_eq!(
+        total_balance_atto + total_fees_atto,
+        initial_supply_atto + total_minted_atto
+    );
+
+    let supply = ledger.get_supply_state().unwrap();
+    assert_eq!(supply.total_burned.as_atto(), total_fees_atto);
+    assert_eq!(total_balance_atto, supply.circulating_supply.as_atto());
 }
 
 #[test]
@@ -109,13 +122,14 @@ fn test_stress_validator_turnover_and_bft_resilience() {
     // Height 1: All 4 honest validators active
     engine.start_height(1);
     let proposal_hash = Hash32::new([0xbb; 32]);
-    let proposer = engine.select_proposer();
+    let proposer = engine.select_proposer(Hash32::ZERO, 1, 0).unwrap();
     engine
         .propose_block(proposal_hash, proposer.address)
         .unwrap();
 
     for i in 0..4 {
         let pv = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             1,
             0,
@@ -129,6 +143,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
 
     for i in 0..4 {
         let pc = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             1,
             0,
@@ -144,13 +159,14 @@ fn test_stress_validator_turnover_and_bft_resilience() {
     // 3 out of 4 validators (75% power > 66.7% quorum) reach consensus!
     engine.start_height(2);
     let proposal_hash_2 = Hash32::new([0xcc; 32]);
-    let proposer_2 = engine.select_proposer();
+    let proposer_2 = engine.select_proposer(Hash32::ZERO, 2, 0).unwrap();
     engine
         .propose_block(proposal_hash_2, proposer_2.address)
         .unwrap();
 
     for i in 0..3 {
         let pv = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Prevote,
             2,
             0,
@@ -164,6 +180,7 @@ fn test_stress_validator_turnover_and_bft_resilience() {
 
     for i in 0..3 {
         let pc = Vote::new(
+            sprax_types::Hash32::ZERO,
             VoteType::Precommit,
             2,
             0,

@@ -8,13 +8,33 @@ import '../../services/wallet_service.dart';
 import '../../shared/widgets/percentage_badge.dart';
 import '../../shared/widgets/sparkline_card.dart';
 import '../../core/utils/formatters.dart';
+import 'package:flutter/services.dart';
+import 'package:url_launcher/url_launcher.dart';
 import '../search/global_search_screen.dart';
 import '../notifications/notifications_screen.dart';
 import '../markets/asset_detail_screen.dart';
 import '../staking/staking_screen.dart';
+import '../trade/trade_hub_screen.dart';
+import '../perps/perps_trading_screen.dart';
 
-class DiscoverScreen extends StatelessWidget {
+class DiscoverScreen extends StatefulWidget {
   const DiscoverScreen({super.key});
+
+  @override
+  State<DiscoverScreen> createState() => _DiscoverScreenState();
+}
+
+class _DiscoverScreenState extends State<DiscoverScreen> {
+  @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (mounted) {
+        final wallet = context.read<WalletService>();
+        context.read<DiscoverService>().refreshMetrics(wallet.currentNetwork.rpcUrl);
+      }
+    });
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -46,11 +66,17 @@ class DiscoverScreen extends StatelessWidget {
         ],
       ),
       body: SafeArea(
-        child: SingleChildScrollView(
-          padding: const EdgeInsets.symmetric(vertical: 12),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            children: [
+        child: RefreshIndicator(
+          onRefresh: () async {
+            await discover.refreshMetrics(wallet.currentNetwork.rpcUrl);
+            await marketData.refreshMarketData();
+          },
+          child: SingleChildScrollView(
+            physics: const AlwaysScrollableScrollPhysics(),
+            padding: const EdgeInsets.symmetric(vertical: 12),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: [
               // Search Quick Bar
               Padding(
                 padding: const EdgeInsets.symmetric(horizontal: 16.0),
@@ -309,20 +335,7 @@ class DiscoverScreen extends StatelessWidget {
                   final proj = discover.filteredProjects[idx];
                   return Card(
                     child: ListTile(
-                      onTap: () {
-                        if (proj.category == EcosystemCategory.validators) {
-                          Navigator.of(context).push(
-                            MaterialPageRoute(builder: (_) => const StakingScreen()),
-                          );
-                        } else {
-                          ScaffoldMessenger.of(context).showSnackBar(
-                            SnackBar(
-                              content: Text('Launching ${proj.name} portal: ${proj.websiteUrl}'),
-                              duration: const Duration(seconds: 2),
-                            ),
-                          );
-                        }
-                      },
+                      onTap: () => _handleProjectTap(context, proj),
                       leading: Container(
                         width: 44,
                         height: 44,
@@ -392,14 +405,7 @@ class DiscoverScreen extends StatelessWidget {
                   itemBuilder: (context, idx) {
                     final guide = discover.guides[idx];
                     return InkWell(
-                      onTap: () {
-                        ScaffoldMessenger.of(context).showSnackBar(
-                          SnackBar(
-                            content: Text('Opening Guide: ${guide.title}'),
-                            duration: const Duration(seconds: 2),
-                          ),
-                        );
-                      },
+                      onTap: () => _handleGuideTap(context, guide),
                       borderRadius: BorderRadius.circular(16),
                       child: Container(
                         width: 220,
@@ -445,6 +451,355 @@ class DiscoverScreen extends StatelessWidget {
           ),
         ),
       ),
+    ),
+  );
+}
+
+  Future<void> _launchExternalUrl(BuildContext context, String url) async {
+    try {
+      final uri = Uri.parse(url);
+      final launched = await launchUrl(uri, mode: LaunchMode.externalApplication);
+      if (!launched && context.mounted) {
+        _showFallbackLinkSheet(context, url);
+      }
+    } catch (_) {
+      if (context.mounted) {
+        _showFallbackLinkSheet(context, url);
+      }
+    }
+  }
+
+  void _showFallbackLinkSheet(BuildContext context, String url) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.darkCardElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              const Row(
+                children: [
+                  Icon(Icons.link, color: AppTheme.primaryCyan),
+                  SizedBox(width: 8),
+                  Text('Portal Link', style: TextStyle(fontWeight: FontWeight.w700, fontSize: 16)),
+                ],
+              ),
+              const SizedBox(height: 12),
+              Container(
+                padding: const EdgeInsets.all(12),
+                decoration: BoxDecoration(
+                  color: AppTheme.darkBackground,
+                  borderRadius: BorderRadius.circular(10),
+                  border: Border.all(color: const Color(0xFF2E3E5B)),
+                ),
+                child: SelectableText(
+                  url,
+                  style: const TextStyle(color: AppTheme.primaryCyan, fontSize: 13),
+                ),
+              ),
+              const SizedBox(height: 16),
+              ElevatedButton.icon(
+                onPressed: () {
+                  Clipboard.setData(ClipboardData(text: url));
+                  Navigator.of(ctx).pop();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Link copied to clipboard!')),
+                  );
+                },
+                icon: const Icon(Icons.copy, size: 18),
+                label: const Text('Copy Link to Clipboard'),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _handleProjectTap(BuildContext context, EcosystemProject proj) {
+    if (proj.id == 'sprax_swap') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const TradeHubScreen()),
+      );
+    } else if (proj.id == 'sprax_perp') {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const PerpsTradingScreen()),
+      );
+    } else if (proj.id == 'sprax_validator_hub' || proj.category == EcosystemCategory.validators) {
+      Navigator.of(context).push(
+        MaterialPageRoute(builder: (_) => const StakingScreen()),
+      );
+    } else {
+      _showProjectDetailBottomSheet(context, proj);
+    }
+  }
+
+  void _showProjectDetailBottomSheet(BuildContext context, EcosystemProject proj) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: AppTheme.darkCardElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        return Padding(
+          padding: const EdgeInsets.all(20.0),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Container(
+                    width: 48,
+                    height: 48,
+                    decoration: BoxDecoration(
+                      color: AppTheme.darkCard,
+                      borderRadius: BorderRadius.circular(12),
+                      border: Border.all(color: const Color(0xFF2E3E5B)),
+                    ),
+                    alignment: Alignment.center,
+                    child: Text(proj.iconEmoji, style: const TextStyle(fontSize: 24)),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          proj.name,
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 4),
+                        Row(
+                          children: [
+                            Container(
+                              padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                              decoration: BoxDecoration(
+                                color: AppTheme.primaryCyan.withAlpha(30),
+                                borderRadius: BorderRadius.circular(4),
+                              ),
+                              child: Text(
+                                proj.tag,
+                                style: const TextStyle(fontSize: 10, fontWeight: FontWeight.w700, color: AppTheme.primaryCyan),
+                              ),
+                            ),
+                            const SizedBox(width: 8),
+                            const Text(
+                              'Verified on Sprax',
+                              style: TextStyle(fontSize: 11, color: AppTheme.successGreen),
+                            ),
+                          ],
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 14),
+              Text(
+                proj.description,
+                style: const TextStyle(fontSize: 13, color: AppTheme.textMuted, height: 1.4),
+              ),
+              if (proj.totalValueLockedUsd > 0 || proj.activeUsers24h > 0) ...[
+                const SizedBox(height: 14),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: AppTheme.darkBackground,
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(color: const Color(0xFF1E293B)),
+                  ),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      if (proj.totalValueLockedUsd > 0)
+                        Column(
+                          children: [
+                            const Text('Total Value Locked', style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                            const SizedBox(height: 4),
+                            Text(
+                              '\$${(proj.totalValueLockedUsd / 1000000).toStringAsFixed(1)}M',
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: Colors.white),
+                            ),
+                          ],
+                        ),
+                      if (proj.activeUsers24h > 0)
+                        Column(
+                          children: [
+                            const Text('24h Active Users', style: TextStyle(fontSize: 11, color: AppTheme.textMuted)),
+                            const SizedBox(height: 4),
+                            Text(
+                              '${proj.activeUsers24h}',
+                              style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w700, color: AppTheme.primaryCyan),
+                            ),
+                          ],
+                        ),
+                    ],
+                  ),
+                ),
+              ],
+              const SizedBox(height: 18),
+              Row(
+                children: [
+                  Expanded(
+                    child: OutlinedButton.icon(
+                      onPressed: () {
+                        Clipboard.setData(ClipboardData(text: proj.websiteUrl));
+                        Navigator.of(ctx).pop();
+                        ScaffoldMessenger.of(context).showSnackBar(
+                          const SnackBar(content: Text('Portal link copied to clipboard!')),
+                        );
+                      },
+                      icon: const Icon(Icons.copy, size: 16),
+                      label: const Text('Copy Link'),
+                    ),
+                  ),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: ElevatedButton.icon(
+                      onPressed: () {
+                        Navigator.of(ctx).pop();
+                        _launchExternalUrl(context, proj.websiteUrl);
+                      },
+                      icon: const Icon(Icons.open_in_new, size: 16),
+                      label: const Text('Open Portal'),
+                    ),
+                  ),
+                ],
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
+
+  void _handleGuideTap(BuildContext context, EcosystemGuide guide) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: AppTheme.darkCardElevated,
+      shape: const RoundedRectangleBorder(
+        borderRadius: BorderRadius.vertical(top: Radius.circular(20)),
+      ),
+      builder: (ctx) {
+        String detailText = '';
+        String actionButtonText = 'Got It';
+        VoidCallback? onAction;
+
+        if (guide.id == 'g_1') {
+          detailText =
+              '• Your 12-word mnemonic phrase generates all your Ed25519 cryptographic keys.\n'
+              '• The Sprax Protocol uses standard BIP-44 path "m/44\'/9999\'/0\'/0" with BLAKE3-derived Bech32 addresses.\n'
+              '• Never share or store your phrase on cloud screenshots or unencrypted text files.\n'
+              '• Keep a physical paper backup in a secure, fireproof location.';
+          actionButtonText = 'Backup Passphrase';
+          onAction = () {
+            Navigator.of(ctx).pop();
+            ScaffoldMessenger.of(context).showSnackBar(
+              const SnackBar(content: Text('Access your backup phrase anytime in Wallet Settings!')),
+            );
+          };
+        } else if (guide.id == 'g_2') {
+          detailText =
+              '• Stake your native SPRX with active validators to secure the Proof-of-Stake consensus network.\n'
+              '• Block generation occurs every 1.5 seconds with instant finality.\n'
+              '• Staking rewards of ~12.5% APY compound automatically at epoch boundaries.\n'
+              '• Unbonding period for unstaking is currently 10 blocks on Devnet.';
+          actionButtonText = 'Go to Staking Hub';
+          onAction = () {
+            Navigator.of(ctx).pop();
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const StakingScreen()),
+            );
+          };
+        } else if (guide.id == 'g_3') {
+          detailText =
+              '• Sprax Perpetual Futures run directly on-chain with virtual AMM pricing.\n'
+              '• Enjoy up to 50x leverage on BTC, ETH, and SPRX pairs with sub-second execution.\n'
+              '• Funding payments occur every 8 hours to align perp prices with index spot prices.\n'
+              '• Keep collateral above the liquidation maintenance threshold (1.0% buffer).';
+          actionButtonText = 'Launch Perps Trading';
+          onAction = () {
+            Navigator.of(ctx).pop();
+            Navigator.of(context).push(
+              MaterialPageRoute(builder: (_) => const PerpsTradingScreen()),
+            );
+          };
+        } else {
+          detailText =
+              '• Sprax Teleport Bridge uses zero-knowledge light-client proofs.\n'
+              '• Cryptographic relayers verify Merkle state proofs across chains without centralized custodians.\n'
+              '• Transfers between Ethereum, Solana, and Sprax settle with cryptographic certainty.';
+          actionButtonText = 'Open Bridge Portal';
+          onAction = () {
+            Navigator.of(ctx).pop();
+            _launchExternalUrl(context, 'https://bridge.sprax.network');
+          };
+        }
+
+        return Padding(
+          padding: EdgeInsets.only(
+            left: 20,
+            right: 20,
+            top: 20,
+            bottom: MediaQuery.of(ctx).viewInsets.bottom + 20,
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: [
+              Row(
+                children: [
+                  Text(guide.icon, style: const TextStyle(fontSize: 28)),
+                  const SizedBox(width: 12),
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text(
+                          guide.title,
+                          style: const TextStyle(fontSize: 16, fontWeight: FontWeight.w700),
+                        ),
+                        const SizedBox(height: 2),
+                        Text(
+                          '${guide.readCategory} • ${guide.duration}',
+                          style: const TextStyle(fontSize: 11, color: AppTheme.primaryCyan, fontWeight: FontWeight.w600),
+                        ),
+                      ],
+                    ),
+                  ),
+                ],
+              ),
+              const SizedBox(height: 16),
+              Container(
+                padding: const EdgeInsets.all(14),
+                decoration: BoxDecoration(
+                  color: AppTheme.darkBackground,
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(color: const Color(0xFF2E3E5B)),
+                ),
+                child: Text(
+                  detailText,
+                  style: const TextStyle(fontSize: 13, height: 1.6, color: Colors.white70),
+                ),
+              ),
+              const SizedBox(height: 20),
+              ElevatedButton(
+                onPressed: onAction,
+                child: Text(actionButtonText),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

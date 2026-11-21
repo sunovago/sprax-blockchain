@@ -6,10 +6,10 @@ class DiscoverService extends ChangeNotifier {
   final RpcService _rpcService;
   EcosystemCategory _selectedCategory = EcosystemCategory.all;
   SpraxChainMetrics _liveMetrics = SpraxChainMetrics(
-    latestBlockHeight: 128450,
-    tps: 14200.0,
-    blockTimeMs: 650,
-    activeValidators: 48,
+    latestBlockHeight: 0,
+    tps: 1.5,
+    blockTimeMs: 1500,
+    activeValidators: 3,
     totalStakedAtto: BigInt.zero,
   );
 
@@ -41,21 +41,15 @@ class DiscoverService extends ChangeNotifier {
 
   List<NetworkMetric> get networkMetrics => [
         NetworkMetric(
-          title: 'Current TPS',
-          value: '${_liveMetrics.tps.toStringAsFixed(0)} TPS',
-          change: '+12.4%',
+          title: 'Latest Block',
+          value: _liveMetrics.latestBlockHeight > 0 ? '#${_liveMetrics.latestBlockHeight}' : 'Connecting...',
+          change: 'Real-time',
           isPositive: true,
         ),
         NetworkMetric(
-          title: 'Avg Block Time',
+          title: 'Target Block Time',
           value: '${_liveMetrics.blockTimeMs} ms',
-          change: 'Sub-second',
-          isPositive: true,
-        ),
-        const NetworkMetric(
-          title: 'Total Staked',
-          value: '68.4M SPRX',
-          change: '68.4% Staked',
+          change: 'Sub-second BFT',
           isPositive: true,
         ),
         NetworkMetric(
@@ -64,10 +58,16 @@ class DiscoverService extends ChangeNotifier {
           change: 'BFT Consensus',
           isPositive: true,
         ),
+        NetworkMetric(
+          title: 'Current TPS',
+          value: '${_liveMetrics.tps.toStringAsFixed(1)} TPS',
+          change: 'Sustained',
+          isPositive: true,
+        ),
         const NetworkMetric(
-          title: 'Avg Gas Fee',
-          value: '< \$0.0001',
-          change: 'Ultra-low',
+          title: 'Min Gas Price',
+          value: '0.0005 SPRX',
+          change: 'Consensus Fixed',
           isPositive: true,
         ),
       ];

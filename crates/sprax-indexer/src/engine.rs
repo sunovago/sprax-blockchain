@@ -123,7 +123,7 @@ impl IndexerEngine {
                     voting_power: val.voting_power,
                     voting_power_percentage: power_pct,
                     tokens: stk_val.tokens,
-                    commission_rate: stk_val.commission.rate,
+                    commission_rate: stk_val.commission.rate_bps as f64 / 10_000.0,
                     status: match stk_val.status {
                         ValidatorStatus::Active => "Active".into(),
                         ValidatorStatus::Jailed => "Jailed".into(),

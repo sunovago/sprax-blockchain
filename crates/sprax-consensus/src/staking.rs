@@ -29,26 +29,26 @@ pub struct ValidatorDescription {
     pub details: String,
 }
 
-/// Validator commission rate configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Validator commission rate configuration using integer basis points (10,000 bps = 100%).
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct CommissionRates {
-    pub rate: f64,            // e.g. 0.05 (5%)
-    pub max_rate: f64,        // e.g. 0.20 (20%)
-    pub max_change_rate: f64, // e.g. 0.01 (1% per update)
+    pub rate_bps: u64,            // e.g. 500 (5%)
+    pub max_rate_bps: u64,        // e.g. 2000 (20%)
+    pub max_change_rate_bps: u64, // e.g. 100 (1% per update)
 }
 
 impl Default for CommissionRates {
     fn default() -> Self {
         Self {
-            rate: 0.05,
-            max_rate: 0.20,
-            max_change_rate: 0.01,
+            rate_bps: 500,
+            max_rate_bps: 2000,
+            max_change_rate_bps: 100,
         }
     }
 }
 
 /// Full on-chain validator staking state.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StakingValidator {
     pub operator_address: Address,
     pub consensus_pubkey: Vec<u8>,
@@ -83,16 +83,16 @@ pub struct UnbondingEntry {
     pub amount: Amount,
 }
 
-/// Consensus & Staking Parameter configuration.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+/// Consensus & Staking Parameter configuration with checked integer arithmetic.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct StakingParams {
     pub max_validators: usize,
     pub unbonding_period_blocks: u64,
-    pub double_sign_slash_fraction: f64, // 0.05 (5%)
-    pub downtime_slash_fraction: f64,    // 0.0001 (0.01%)
-    pub downtime_jail_blocks: u64,       // 600 blocks
-    pub min_self_stake: Amount,          // 1,000 SPRX
-    pub missed_blocks_threshold: u64,    // 50 blocks
+    pub double_sign_slash_bps: u64,   // 500 (5.00%)
+    pub downtime_slash_bps: u64,      // 1 (0.01%)
+    pub downtime_jail_blocks: u64,    // 600 blocks
+    pub min_self_stake: Amount,       // 1,000 SPRX
+    pub missed_blocks_threshold: u64, // 50 blocks
 }
 
 impl Default for StakingParams {
@@ -100,8 +100,8 @@ impl Default for StakingParams {
         Self {
             max_validators: 100,
             unbonding_period_blocks: 10, // 10 blocks in devnet / 201600 in mainnet
-            double_sign_slash_fraction: 0.05,
-            downtime_slash_fraction: 0.0001,
+            double_sign_slash_bps: 500,
+            downtime_slash_bps: 1,
             downtime_jail_blocks: 600,
             min_self_stake: Amount::from_sprx_whole(1_000).unwrap(),
             missed_blocks_threshold: 50,
@@ -310,9 +310,13 @@ impl StakingKeeper {
             return Ok(Amount::ZERO); // Already slashed and tombstoned
         }
 
-        // 5% slash
-        let slashed_atto =
-            ((val.tokens.as_atto() as f64) * self.params.double_sign_slash_fraction) as u128;
+        // 5% slash (500 bps)
+        let slashed_atto = val
+            .tokens
+            .as_atto()
+            .checked_mul(self.params.double_sign_slash_bps as u128)
+            .unwrap_or(0)
+            / 10_000;
         let slashed_amount = Amount::from_atto(slashed_atto);
 
         val.tokens = val
@@ -342,8 +346,12 @@ impl StakingKeeper {
 
         val.missed_blocks_count += 1;
         if val.missed_blocks_count >= self.params.missed_blocks_threshold {
-            let slashed_atto =
-                ((val.tokens.as_atto() as f64) * self.params.downtime_slash_fraction) as u128;
+            let slashed_atto = val
+                .tokens
+                .as_atto()
+                .checked_mul(self.params.downtime_slash_bps as u128)
+                .unwrap_or(0)
+                / 10_000;
             let slashed_amount = Amount::from_atto(slashed_atto);
 
             val.tokens = val
@@ -401,23 +409,49 @@ impl StakingKeeper {
             .collect();
 
         // Sort descending by token weight
-        active.sort_by_key(|b| std::cmp::Reverse(b.tokens));
+        active.sort_by(|a, b| {
+            b.tokens
+                .cmp(&a.tokens)
+                .then_with(|| a.operator_address.cmp(&b.operator_address))
+        });
         active.truncate(self.params.max_validators);
 
         let consensus_validators: Vec<Validator> = active
             .into_iter()
             .map(|v| {
                 // Voting power in millions of atto-SPRX units (or integer SPRX)
-                let voting_power = (v.tokens.as_atto() / 1_000_000_000_000_000_000).max(1) as u64;
-                Validator::new(v.operator_address, v.consensus_pubkey.clone(), voting_power)
+                let voting_power =
+                    u64::try_from((v.tokens.as_atto() / 1_000_000_000_000_000_000).max(1))
+                        .map_err(|_| {
+                            ConsensusError::InvalidValidatorSet(
+                                "validator voting power overflow".into(),
+                            )
+                        })?;
+                Ok(Validator::new(
+                    v.operator_address,
+                    v.consensus_pubkey.clone(),
+                    voting_power,
+                ))
             })
-            .collect();
+            .collect::<Result<_, ConsensusError>>()?;
 
         ValidatorSet::new(consensus_validators)
     }
 
     pub fn get_validator(&self, addr: &Address) -> Option<&StakingValidator> {
         self.validators.get(addr)
+    }
+
+    /// All validator addresses known to this keeper (active, jailed, or unbonding) — the set
+    /// `ConsensusDriver` walks each height to re-sync cached `tokens` from the canonical ledger.
+    pub fn all_validator_addresses(&self) -> Vec<Address> {
+        self.validators.keys().copied().collect()
+    }
+
+    pub fn sync_validator_tokens(&mut self, addr: &Address, canonical_tokens: Amount) {
+        if let Some(val) = self.validators.get_mut(addr) {
+            val.tokens = canonical_tokens;
+        }
     }
 
     pub fn get_delegation(&self, delegator: &Address, validator: &Address) -> Option<&Delegation> {
@@ -428,6 +462,14 @@ impl StakingKeeper {
         self.delegations
             .values()
             .filter(|d| d.delegator_address == delegator)
+            .cloned()
+            .collect()
+    }
+
+    pub fn get_validator_delegations(&self, validator: &Address) -> Vec<Delegation> {
+        self.delegations
+            .values()
+            .filter(|d| d.validator_address == *validator)
             .cloned()
             .collect()
     }
@@ -571,6 +613,7 @@ mod tests {
             height: 42,
             round: 0,
             vote_a: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 42,
                 0,
@@ -579,6 +622,7 @@ mod tests {
                 vec![1; 64],
             ),
             vote_b: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 42,
                 0,
@@ -630,6 +674,7 @@ mod tests {
             height: 10,
             round: 0,
             vote_a: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 10,
                 0,
@@ -638,6 +683,7 @@ mod tests {
                 vec![1; 64],
             ),
             vote_b: Vote::new(
+                sprax_types::Hash32::ZERO,
                 VoteType::Precommit,
                 10,
                 0,

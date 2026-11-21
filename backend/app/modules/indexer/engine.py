@@ -4,18 +4,21 @@ Polls the chain, indexes blocks+transactions+validators into PostgreSQL.
 Runs as a background Celery task or standalone async loop.
 """
 from __future__ import annotations
+
 import asyncio
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from decimal import Decimal
+
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, update
-from app.modules.blockchain.client import get_chain_client
-from app.db.session import async_session_factory
-from app.db.models.blockchain import Block, Transaction, Address, Transfer
-from app.db.models.validator import Validator, Delegation
-from app.db.models.indexer import IndexerState, NetworkStat
-from app.core.logging import logger
+
 from app.core.config import settings
+from app.core.logging import logger
+from app.db.models.blockchain import Address, Block, Transaction, Transfer
+from app.db.models.indexer import IndexerState, NetworkStat
+from app.db.models.validator import Validator
+from app.db.session import async_session_factory
+from app.modules.blockchain.client import get_chain_client
 
 
 class IndexerEngine:
@@ -175,8 +178,6 @@ class IndexerEngine:
             logger.error("sync_validators_error", error=str(e))
 
     async def _capture_network_stat(self, db: AsyncSession, height: int) -> None:
-        result = await db.execute(select(NetworkStat).order_by(NetworkStat.captured_at.desc()).limit(1))
-        last = result.scalar_one_or_none()
         v_result = await db.execute(select(Validator).where(Validator.status == "ACTIVE"))
         active_count = len(v_result.scalars().all())
 
@@ -198,10 +199,10 @@ class IndexerEngine:
     @staticmethod
     def _parse_ts(ts: str | int | None) -> datetime:
         if ts is None:
-            return datetime.now(timezone.utc)
+            return datetime.now(UTC)
         if isinstance(ts, int):
-            return datetime.fromtimestamp(ts, tz=timezone.utc)
+            return datetime.fromtimestamp(ts, tz=UTC)
         try:
-            return datetime.fromisoformat(ts.replace("Z", "+00:00"))
+            return datetime.fromisoformat(ts)
         except (ValueError, AttributeError):
-            return datetime.now(timezone.utc)
+            return datetime.now(UTC)

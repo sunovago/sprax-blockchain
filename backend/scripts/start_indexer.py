@@ -3,8 +3,9 @@ Standalone indexer runner.
 Usage: python scripts/start_indexer.py
 """
 import asyncio
-from app.modules.indexer.engine import IndexerEngine
+
 from app.core.logging import configure_logging
+from app.modules.indexer.engine import IndexerEngine
 
 configure_logging()
 

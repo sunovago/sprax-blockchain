@@ -1,6 +1,7 @@
 import asyncio
-from app.workers.celery_app import celery_app
+
 from app.core.logging import logger
+from app.workers.celery_app import celery_app
 
 
 @celery_app.task(name="app.workers.tasks.indexer_sync.run_indexer_cycle", bind=True, max_retries=1)

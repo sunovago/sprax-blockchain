@@ -59,14 +59,14 @@
       "amountSprx": "150000000",
       "amountAtto": "150000000000000000000000000",
       "address": "sprax1treasury0reserve00000000000000000000",
-      "vestingTerms": "Multi-sig operational treasury — 3/5 threshold"
+      "vestingTerms": "Multi-sig operational treasury \u2014 3/5 threshold"
     },
     "validatorIncentives": {
       "pct": "10.0",
       "amountSprx": "100000000",
       "amountAtto": "100000000000000000000000000",
       "address": "sprax1validator0incentives000000000000000",
-      "vestingTerms": "Genesis staking incentives — linear 3 years"
+      "vestingTerms": "Genesis staking incentives \u2014 linear 3 years"
     },
     "coreContributors": {
       "pct": "10.0",
@@ -78,43 +78,25 @@
   },
   "genesisValidators": [
     {
-      "operatorAddress": "spraxvaloper1genesis0validator01000000000000000000",
-      "consensusPubkey": "GENESIS_VAL_01_PUBKEY_PLACEHOLDER",
-      "moniker": "SPRAX Core Foundation",
-      "identity": "SPRAX_CORE_FOUNDATION",
-      "website": "https://sprax.network",
-      "details": "Official genesis validator operated by the SPRAX core team.",
-      "commissionRate": "0.05",
-      "commissionMaxRate": "0.20",
-      "commissionMaxChangeRate": "0.01",
-      "selfDelegationAtto": "5000000000000000000000000",
-      "selfDelegationSprx": "5000000"
+      "moniker": "val-foundation",
+      "consensusPubkey": "0xfda8e190066ddaa8347431b7dee348d21b021b97a9f03c59dfee911ef604aecb",
+      "operatorAddress": "sprax1l9uzwsc6jpdvq6452sd35yc0ec4cyf705g0nhv",
+      "selfStakeAtto": "100000000000000000000000",
+      "commissionRate": "0.05"
     },
     {
-      "operatorAddress": "spraxvaloper1genesis0validator02000000000000000000",
-      "consensusPubkey": "GENESIS_VAL_02_PUBKEY_PLACEHOLDER",
-      "moniker": "SPRAX Infrastructure Labs",
-      "identity": "SPRAX_INFRA",
-      "website": "https://infra.sprax.network",
-      "details": "Infrastructure validator for SPRAX protocol stability.",
-      "commissionRate": "0.05",
-      "commissionMaxRate": "0.20",
-      "commissionMaxChangeRate": "0.01",
-      "selfDelegationAtto": "3000000000000000000000000",
-      "selfDelegationSprx": "3000000"
+      "moniker": "val-infralabs",
+      "consensusPubkey": "0xa447ddfd0f109c4e2b0424f0a37209f5dc5f970ccd948d79d85341ad0d555652",
+      "operatorAddress": "sprax1a2uejxwmujvtz3kqrwnlcchd6cv8z2rke2r638",
+      "selfStakeAtto": "100000000000000000000000",
+      "commissionRate": "0.05"
     },
     {
-      "operatorAddress": "spraxvaloper1genesis0validator03000000000000000000",
-      "consensusPubkey": "GENESIS_VAL_03_PUBKEY_PLACEHOLDER",
-      "moniker": "SPRAX Security Council",
-      "identity": "SPRAX_SECURITY",
-      "website": "https://security.sprax.network",
-      "details": "Security-focused validator with HSM key storage.",
-      "commissionRate": "0.05",
-      "commissionMaxRate": "0.20",
-      "commissionMaxChangeRate": "0.01",
-      "selfDelegationAtto": "2000000000000000000000000",
-      "selfDelegationSprx": "2000000"
+      "moniker": "val-sec-council",
+      "consensusPubkey": "0xf81f45bbb8655d59727a82285310c29a5ada8cd5430882983198418bd02ea194",
+      "operatorAddress": "sprax105tnk6cwcm277dknhdngp8ejqff5jw6nty4s9g",
+      "selfStakeAtto": "100000000000000000000000",
+      "commissionRate": "0.05"
     }
   ],
   "genesisSignatures": {

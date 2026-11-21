@@ -10,8 +10,7 @@ import '../../shared/widgets/market_chart.dart';
 import '../../shared/widgets/percentage_badge.dart';
 import '../send/send_screen.dart';
 import '../receive/receive_screen.dart';
-import '../perps/perps_trading_screen.dart';
-import '../../services/perps_service.dart';
+import '../trade/buy_sell_screen.dart';
 
 class AssetDetailScreen extends StatefulWidget {
   final MarketAsset asset;
@@ -264,12 +263,10 @@ class _AssetDetailScreenState extends State<AssetDetailScreen> {
                   Expanded(
                     child: ElevatedButton.icon(
                       icon: const Icon(Icons.candlestick_chart, size: 16),
-                      label: const Text('Trade'),
+                      label: const Text('Buy/Sell'),
                       onPressed: () {
-                        final perps = context.read<PerpsService>();
-                        perps.selectMarket('${liveAsset.symbol}/USDT');
                         Navigator.of(context).push(
-                          MaterialPageRoute(builder: (_) => const PerpsTradingScreen()),
+                          MaterialPageRoute(builder: (_) => BuySellScreen(initialMode: 'spot', initialAsset: liveAsset.symbol)),
                         );
                       },
                     ),

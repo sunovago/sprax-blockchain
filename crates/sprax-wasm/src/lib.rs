@@ -1,4 +1,8 @@
+pub mod backend;
 pub mod contracts;
+pub mod runtime;
+pub use cosmwasm_std;
+pub use runtime::{ContractContext, CosmWasmRuntime, RuntimeContractInfo, RuntimeResult};
 pub mod error;
 pub mod gas;
 pub mod storage;

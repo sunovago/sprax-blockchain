@@ -4,8 +4,8 @@ import 'package:bech32/bech32.dart';
 import 'package:bip39/bip39.dart' as bip39;
 import 'package:crypto/crypto.dart' as crypto;
 import 'package:ed25519_edwards/ed25519_edwards.dart' as ed;
-import 'package:pointycastle/digests/ripemd160.dart';
 import '../constants/app_constants.dart';
+import 'blake3.dart';
 
 class KeyPairResult {
   final Uint8List privateKeyBytes;
@@ -71,12 +71,9 @@ class CryptoUtils {
     final privateKey = ed.newKeyFromSeed(derivedSeed);
     final publicKey = ed.public(privateKey);
 
-    // Compute raw 20-byte address: RIPEMD160(SHA256(pubkey))
-    final sha256Hash = crypto.sha256.convert(publicKey.bytes).bytes;
-    final ripemd = RIPEMD160Digest();
-    final addressBytes = Uint8List(20);
-    ripemd.update(Uint8List.fromList(sha256Hash), 0, sha256Hash.length);
-    ripemd.doFinal(addressBytes, 0);
+    // Compute raw 20-byte address: first 20 bytes of BLAKE3(pubkey) matching Sprax Protocol
+    final blake3Hash = Blake3.hash(publicKey.bytes);
+    final addressBytes = Uint8List.fromList(blake3Hash.sublist(0, 20));
 
     final bech32Address = encodeToBech32(addressBytes);
 

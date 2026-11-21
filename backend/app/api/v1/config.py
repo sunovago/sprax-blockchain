@@ -1,6 +1,7 @@
 from fastapi import APIRouter
-from app.core.feature_flags import get_public_flags
+
 from app.core.config import settings
+from app.core.feature_flags import get_public_flags
 from app.core.response import ApiResponse
 
 router = APIRouter()

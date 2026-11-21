@@ -1,14 +1,13 @@
-from fastapi import APIRouter, Query, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Query
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, desc
-from fastapi import Depends
+
 from app.core.dependencies import get_db
-from app.db.models.blockchain import Block, Transaction, Address
-from app.db.models.validator import Validator
-from app.db.models.indexer import IndexerState, NetworkStat
 from app.core.response import ApiResponse, PaginatedResponse
+from app.db.models.blockchain import Address, Block, Transaction
+from app.db.models.indexer import IndexerState, NetworkStat
+from app.db.models.validator import Validator
 from app.modules.blockchain.address import atto_to_sprx
-from app.core.exceptions import SpraxError, INVALID_ADDRESS
 
 router = APIRouter()
 

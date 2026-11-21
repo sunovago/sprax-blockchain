@@ -21,6 +21,8 @@ serde.workspace = true
 serde_json.workspace = true
 parking_lot.workspace = true
 redb = { workspace = true, optional = true }
+hex.workspace = true
+sha2.workspace = true
 
 [dev-dependencies]
 tempfile.workspace = true

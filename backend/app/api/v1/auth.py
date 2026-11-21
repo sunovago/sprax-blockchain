@@ -1,16 +1,19 @@
-from fastapi import APIRouter, Depends, HTTPException
+import hashlib
+import uuid
+from datetime import UTC, datetime, timedelta
+
+from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
-from datetime import datetime, timedelta, timezone
-from app.core.dependencies import get_db, get_current_user
-from app.core.security import create_access_token, create_refresh_token, generate_challenge_nonce
-from app.db.models.user import User, Session
-from app.db.redis import redis_set, redis_get, redis_delete
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.core.dependencies import get_current_user, get_db
+from app.core.exceptions import INVALID_REQUEST, UNAUTHORIZED, SpraxError
 from app.core.response import ApiResponse
-from app.core.exceptions import SpraxError, UNAUTHORIZED, INVALID_REQUEST
+from app.core.security import create_access_token, create_refresh_token, generate_challenge_nonce
+from app.db.models.user import Session, User
+from app.db.redis import redis_delete, redis_get, redis_set
 from app.modules.blockchain.address import is_valid_address
-import uuid, hashlib
 
 router = APIRouter()
 
@@ -61,8 +64,7 @@ async def verify_signature(req: VerifyRequest, db: AsyncSession = Depends(get_db
     # Cryptographic Ed25519 signature verification
     try:
         pk_str = req.public_key.strip()
-        if pk_str.startswith("0x"):
-            pk_str = pk_str[2:]
+        pk_str = pk_str.removeprefix("0x")
         try:
             pk_bytes = bytes.fromhex(pk_str)
         except ValueError:
@@ -70,16 +72,15 @@ async def verify_signature(req: VerifyRequest, db: AsyncSession = Depends(get_db
             pk_bytes = base64.b64decode(pk_str)
 
         sig_str = req.signature.strip()
-        if sig_str.startswith("0x"):
-            sig_str = sig_str[2:]
+        sig_str = sig_str.removeprefix("0x")
         try:
             sig_bytes = bytes.fromhex(sig_str)
         except ValueError:
             import base64
             sig_bytes = base64.b64decode(sig_str)
 
-        from cryptography.hazmat.primitives.asymmetric import ed25519
         from cryptography.exceptions import InvalidSignature
+        from cryptography.hazmat.primitives.asymmetric import ed25519
 
         if len(pk_bytes) != 32 or len(sig_bytes) != 64:
             raise SpraxError(UNAUTHORIZED, "Invalid public key or signature byte length", 401)
@@ -108,7 +109,7 @@ async def verify_signature(req: VerifyRequest, db: AsyncSession = Depends(get_db
     session = Session(
         user_id=user.id,
         refresh_token_hash=hashlib.sha256(refresh_token.encode()).hexdigest(),
-        expires_at=datetime.now(timezone.utc) + timedelta(days=30),
+        expires_at=datetime.now(UTC) + timedelta(days=30),
     )
     db.add(session)
     await db.commit()
@@ -128,7 +129,7 @@ async def refresh_token(req: RefreshRequest, db: AsyncSession = Depends(get_db))
         select(Session).where(
             Session.refresh_token_hash == token_hash,
             Session.is_active == True,
-            Session.expires_at > datetime.now(timezone.utc),
+            Session.expires_at > datetime.now(UTC),
         )
     )
     session = result.scalar_one_or_none()

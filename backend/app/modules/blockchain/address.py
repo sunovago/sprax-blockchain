@@ -4,7 +4,6 @@ Address format: Bech32 with prefix 'sprax1'
 Validator operator format: 'spraxvaloper1'
 """
 import re
-from app.core.config import settings
 
 ADDRESS_REGEX = re.compile(r'^sprax1[a-zA-Z0-9]{38}$')
 VALOPER_REGEX = re.compile(r'^spraxvaloper1[a-zA-Z0-9]{38}$')

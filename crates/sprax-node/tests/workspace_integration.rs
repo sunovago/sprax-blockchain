@@ -4,7 +4,6 @@ use sprax_crypto::{Ed25519Keypair, HdWallet, Secp256k1Keypair};
 use sprax_node::{Environment, NodeConfig, NodeService};
 use sprax_storage::{MemKVStore, StateCommitment};
 use sprax_types::{Amount, ChainId, KeyType, Transaction, TxBody, TxFee, TxMessage};
-use std::path::PathBuf;
 
 #[tokio::test]
 async fn test_end_to_end_workspace_pipeline() {
@@ -46,7 +45,7 @@ async fn test_end_to_end_workspace_pipeline() {
         timeout_height: 100,
     };
 
-    let sign_bytes = serde_json::to_vec(&tx_body).expect("serialize tx body");
+    let sign_bytes = tx_body.sign_bytes().expect("serialize tx body");
     let signature = alice_kp.sign(&sign_bytes);
 
     let tx = Transaction::new(
@@ -74,10 +73,9 @@ async fn test_end_to_end_workspace_pipeline() {
     assert_eq!(proposer_1.address, alice_addr);
 
     // 6. Initialize Node Service and verify lifecycle
-    let config = NodeConfig::for_environment(
-        Environment::Development,
-        PathBuf::from(".sprx_test_runtime"),
-    );
+    let temp_dir = tempfile::tempdir().expect("create tempdir");
+    let config =
+        NodeConfig::for_environment(Environment::Development, temp_dir.path().to_path_buf());
     let service = NodeService::new_or_load(config.home_dir.clone()).expect("create node service");
     assert!(!service.is_running());
 

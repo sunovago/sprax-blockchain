@@ -1,7 +1,8 @@
-import React, { useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import {
   Account,
   AddressUtil,
+  CW20Balance,
   NetworkConfig,
   SpraxClient,
   TransactionBuilder,
@@ -13,6 +14,8 @@ interface SendModalProps {
   privateKey: Uint8Array;
   onClose: () => void;
   onSuccess: (txHash: string) => void;
+  cw20Tokens?: CW20Balance[];
+  initialTokenAddress?: string;
 }
 
 export const SendModal: React.FC<SendModalProps> = ({
@@ -21,18 +24,35 @@ export const SendModal: React.FC<SendModalProps> = ({
   privateKey,
   onClose,
   onSuccess,
+  cw20Tokens = [],
+  initialTokenAddress,
 }) => {
+  const [selectedAsset, setSelectedAsset] = useState<string>(
+    initialTokenAddress || "SPRX"
+  );
   const [recipient, setRecipient] = useState("");
   const [amount, setAmount] = useState("");
   const [memo, setMemo] = useState("");
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState("");
+  const active = useRef(true);
+
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
 
   const client = new SpraxClient(network);
   const isValidRecipient = recipient.length > 0 && AddressUtil.isValidAddress(recipient);
 
+  const selectedCw20 = cw20Tokens.find((t) => t.tokenAddress === selectedAsset);
+  const isCw20 = !!selectedCw20;
+
   const handleSend = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (isSubmitting) return;
     setErrorMessage("");
 
     if (!isValidRecipient) {
@@ -41,9 +61,9 @@ export const SendModal: React.FC<SendModalProps> = ({
     }
 
     try {
-      const parsedAmount = parseFloat(amount);
-      if (isNaN(parsedAmount) || parsedAmount <= 0) {
-        setErrorMessage("Amount must be a positive decimal number.");
+      const numAmount = parseFloat(amount);
+      if (isNaN(numAmount) || numAmount <= 0) {
+        setErrorMessage("Amount must be a positive number.");
         return;
       }
 
@@ -51,99 +71,259 @@ export const SendModal: React.FC<SendModalProps> = ({
 
       // 1. Fetch current sequence nonce from node
       const nonce = await client.getAccountNonce(account.addressBech32);
+      if (!active.current) return;
 
-      // 2. Sign transaction offline
-      const signedTx = TransactionBuilder.sign(
-        {
-          fromAddress: account.addressBech32,
-          toAddress: recipient,
-          amountSprx: amount,
-          nonce,
-          memo,
-        },
-        network.chainId,
-        privateKey,
-        account.algorithm
-      );
+      let signedTx;
+      if (isCw20 && selectedCw20) {
+        // 2a. Sign CW20 transfer transaction offline
+        signedTx = TransactionBuilder.signCw20Transfer(
+          {
+            fromAddress: account.addressBech32,
+            tokenAddress: selectedCw20.tokenAddress,
+            recipient,
+            amount,
+            decimals: selectedCw20.decimals,
+            nonce,
+            memo,
+          },
+          network.chainId,
+          privateKey,
+          account.algorithm
+        );
+      } else {
+        // 2b. Sign native SPRX transfer offline
+        if (TransactionBuilder.sprxToAtto(amount) <= 0n) {
+          setErrorMessage("Amount must be a positive decimal number.");
+          setIsSubmitting(false);
+          return;
+        }
+
+        signedTx = TransactionBuilder.sign(
+          {
+            fromAddress: account.addressBech32,
+            toAddress: recipient,
+            amountSprx: amount,
+            nonce,
+            memo,
+          },
+          network.chainId,
+          privateKey,
+          account.algorithm
+        );
+      }
 
       // 3. Broadcast signed payload to network RPC
       const txHash = await client.broadcastTransaction(signedTx);
-      onSuccess(txHash);
-      onClose();
+      if (active.current) {
+        onSuccess(txHash);
+        onClose();
+      }
     } catch (err: any) {
       setErrorMessage(err.message || "Failed to broadcast transaction");
     } finally {
-      setIsSubmitting(false);
+      if (active.current) {
+        setIsSubmitting(false);
+      }
     }
   };
 
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", display: "flex", justifyContent: "center", alignItems: "center", zIndex: 1000, padding: 16 }}>
-      <div style={{ background: "#1f2430", width: "100%", maxWidth: 440, borderRadius: 16, padding: 24, color: "#fff", border: "1px solid #2d3748" }}>
+    <div
+      style={{
+        position: "fixed",
+        inset: 0,
+        background: "rgba(0,0,0,0.75)",
+        display: "flex",
+        justifyContent: "center",
+        alignItems: "center",
+        zIndex: 1000,
+        padding: 16,
+      }}
+    >
+      <div
+        style={{
+          background: "#1f2430",
+          width: "100%",
+          maxWidth: 440,
+          borderRadius: 16,
+          padding: 24,
+          color: "#fff",
+          border: "1px solid #2d3748",
+        }}
+      >
         <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 20 }}>
-          <h2 style={{ margin: 0, fontSize: 20 }}>Send SPRX</h2>
-          <button onClick={onClose} style={{ background: "none", border: "none", color: "#aaa", fontSize: 20, cursor: "pointer" }}>✕</button>
+          <h2 style={{ margin: 0, fontSize: 20 }}>
+            Send {isCw20 ? selectedCw20?.symbol : "SPRX"}
+          </h2>
+          <button
+            onClick={onClose}
+            style={{ background: "none", border: "none", color: "#aaa", fontSize: 20, cursor: "pointer" }}
+          >
+            ✕
+          </button>
         </div>
 
         {errorMessage && (
-          <div style={{ background: "#ef444422", border: "1px solid #ef4444", color: "#fca5a5", padding: 12, borderRadius: 8, fontSize: 13, marginBottom: 16 }}>
+          <div
+            style={{
+              background: "#ef444422",
+              border: "1px solid #ef4444",
+              color: "#fca5a5",
+              padding: 12,
+              borderRadius: 8,
+              fontSize: 13,
+              marginBottom: 16,
+            }}
+          >
             {errorMessage}
           </div>
         )}
 
         <form onSubmit={handleSend}>
+          {/* Asset Selector */}
+          <div style={{ marginBottom: 16 }}>
+            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>
+              Asset
+            </label>
+            <select
+              value={selectedAsset}
+              onChange={(e) => setSelectedAsset(e.target.value)}
+              style={{
+                width: "100%",
+                padding: 12,
+                background: "#11141c",
+                border: "1px solid #374151",
+                borderRadius: 8,
+                color: "#fff",
+                fontSize: 14,
+                cursor: "pointer",
+                boxSizing: "border-box",
+              }}
+            >
+              <option value="SPRX">Native SPRX</option>
+              {cw20Tokens.map((t) => (
+                <option key={t.tokenAddress} value={t.tokenAddress}>
+                  {t.symbol} ({t.name}) - Balance: {t.balance}
+                </option>
+              ))}
+            </select>
+          </div>
+
           {/* Recipient */}
           <div style={{ marginBottom: 16 }}>
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>Recipient Address</label>
+            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>
+              Recipient Address
+            </label>
             <input
               type="text"
               placeholder="sprax1... or 0x..."
               value={recipient}
               onChange={(e) => setRecipient(e.target.value)}
-              style={{ width: "100%", padding: 12, background: "#11141c", border: `1px solid ${recipient && !isValidRecipient ? "#ef4444" : "#374151"}`, borderRadius: 8, color: "#fff", boxSizing: "border-box" }}
+              style={{
+                width: "100%",
+                padding: 12,
+                background: "#11141c",
+                border: `1px solid ${recipient && !isValidRecipient ? "#ef4444" : "#374151"}`,
+                borderRadius: 8,
+                color: "#fff",
+                boxSizing: "border-box",
+              }}
               required
             />
           </div>
 
           {/* Amount */}
           <div style={{ marginBottom: 16 }}>
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>Amount (SPRX)</label>
+            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: 6 }}>
+              <label style={{ fontSize: 13, color: "#9ca3af" }}>
+                Amount ({isCw20 ? selectedCw20?.symbol : "SPRX"})
+              </label>
+              {isCw20 && selectedCw20 && (
+                <span
+                  style={{ fontSize: 12, color: "#60a5fa", cursor: "pointer" }}
+                  onClick={() => setAmount(selectedCw20.balance)}
+                >
+                  Max: {selectedCw20.balance}
+                </span>
+              )}
+            </div>
             <input
               type="number"
               step="any"
               placeholder="0.00"
               value={amount}
               onChange={(e) => setAmount(e.target.value)}
-              style={{ width: "100%", padding: 12, background: "#11141c", border: "1px solid #374151", borderRadius: 8, color: "#fff", boxSizing: "border-box" }}
+              style={{
+                width: "100%",
+                padding: 12,
+                background: "#11141c",
+                border: "1px solid #374151",
+                borderRadius: 8,
+                color: "#fff",
+                boxSizing: "border-box",
+              }}
               required
             />
           </div>
 
           {/* Memo */}
           <div style={{ marginBottom: 20 }}>
-            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>Memo (Optional)</label>
+            <label style={{ display: "block", fontSize: 13, color: "#9ca3af", marginBottom: 6 }}>
+              Memo (Optional)
+            </label>
             <input
               type="text"
               placeholder="Optional message"
               value={memo}
               onChange={(e) => setMemo(e.target.value)}
-              style={{ width: "100%", padding: 12, background: "#11141c", border: "1px solid #374151", borderRadius: 8, color: "#fff", boxSizing: "border-box" }}
+              style={{
+                width: "100%",
+                padding: 12,
+                background: "#11141c",
+                border: "1px solid #374151",
+                borderRadius: 8,
+                color: "#fff",
+                boxSizing: "border-box",
+              }}
             />
           </div>
 
           {/* Fee Notice */}
-          <div style={{ display: "flex", justifyContent: "space-between", fontSize: 12, color: "#9ca3af", marginBottom: 20, padding: "8px 12px", background: "#11141c", borderRadius: 8 }}>
+          <div
+            style={{
+              display: "flex",
+              justifyContent: "space-between",
+              fontSize: 12,
+              color: "#9ca3af",
+              marginBottom: 20,
+              padding: "8px 12px",
+              background: "#11141c",
+              borderRadius: 8,
+            }}
+          >
             <span>Network Fee:</span>
-            <span style={{ color: "#fff", fontWeight: "bold" }}>0.0005 SPRX (≈ $0.002)</span>
+            <span style={{ color: "#fff", fontWeight: "bold" }}>
+              {isCw20 ? "0.001 SPRX (Contract Exec)" : "0.0005 SPRX"}
+            </span>
           </div>
 
           {/* Submit */}
           <button
             type="submit"
             disabled={isSubmitting}
-            style={{ width: "100%", padding: 14, background: isSubmitting ? "#4b5563" : "#3b82f6", color: "#fff", border: "none", borderRadius: 10, fontSize: 16, fontWeight: "bold", cursor: isSubmitting ? "not-allowed" : "pointer" }}
+            style={{
+              width: "100%",
+              padding: 14,
+              background: isSubmitting ? "#4b5563" : isCw20 ? "#8b5cf6" : "#3b82f6",
+              color: "#fff",
+              border: "none",
+              borderRadius: 10,
+              fontSize: 16,
+              fontWeight: "bold",
+              cursor: isSubmitting ? "not-allowed" : "pointer",
+            }}
           >
-            {isSubmitting ? "Signing & Broadcasting..." : "Sign & Submit Transaction"}
+            {isSubmitting ? "Signing & Broadcasting..." : `Sign & Send ${isCw20 ? selectedCw20?.symbol : "SPRX"}`}
           </button>
         </form>
       </div>

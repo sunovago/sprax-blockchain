@@ -1,37 +1,16 @@
-use crate::vote::Vote;
-use serde::{Deserialize, Serialize};
-use sprax_types::Address;
-
-/// Slashing evidence for validator equivocation (double-signing).
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct EquivocationEvidence {
-    pub validator_address: Address,
-    pub height: u64,
-    pub round: u32,
-    pub vote_a: Vote,
-    pub vote_b: Vote,
-}
-
-impl EquivocationEvidence {
-    pub fn is_valid_equivocation(&self) -> bool {
-        self.vote_a.validator_address == self.vote_b.validator_address
-            && self.vote_a.height == self.vote_b.height
-            && self.vote_a.round == self.vote_b.round
-            && self.vote_a.vote_type == self.vote_b.vote_type
-            && self.vote_a.block_hash != self.vote_b.block_hash
-    }
-}
+pub use sprax_types::EquivocationEvidence;
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::vote::VoteType;
-    use sprax_types::Hash32;
+    use sprax_types::{Address, Hash32, Vote};
 
     #[test]
     fn test_equivocation_validation() {
         let addr = Address::new([5u8; 20]);
         let vote1 = Vote::new(
+            Hash32::ZERO,
             VoteType::Precommit,
             100,
             0,
@@ -40,6 +19,7 @@ mod tests {
             vec![1; 64],
         );
         let vote2 = Vote::new(
+            Hash32::ZERO,
             VoteType::Precommit,
             100,
             0,

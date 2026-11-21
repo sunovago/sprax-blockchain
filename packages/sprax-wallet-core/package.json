@@ -7,7 +7,8 @@
   "types": "dist/index.d.ts",
   "scripts": {
     "build": "tsc",
-    "test": "jest"
+    "test": "vitest run",
+    "export:node-fixture": "node scripts/export-node-fixture.mjs"
   },
   "keywords": [
     "sprax",
@@ -27,17 +28,9 @@
     "bip39": "^3.1.0"
   },
   "devDependencies": {
-    "@types/jest": "^29.5.12",
     "@types/node": "^20.14.9",
-    "jest": "^29.7.0",
-    "ts-jest": "^29.1.5",
+    "vite": "^6.4.3",
+    "vitest": "^4.1.11",
     "typescript": "^5.5.2"
-  },
-  "jest": {
-    "preset": "ts-jest",
-    "testEnvironment": "node",
-    "testMatch": [
-      "**/tests/**/*.test.ts"
-    ]
   }
 }

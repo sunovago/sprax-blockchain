@@ -92,3 +92,75 @@ fn test_faucet_disbursement_rate_limiting_and_auditing() {
     assert_eq!(audit_log.len(), 2);
     assert_eq!(audit_log[0].client_ip, "198.51.100.1");
 }
+
+#[tokio::test(flavor = "multi_thread")]
+async fn test_faucet_http_server_endpoints() {
+    let faucet_kp = Ed25519Keypair::from_seed(&[200u8; 32]);
+    let recipient_kp = Ed25519Keypair::from_seed(&[201u8; 32]);
+
+    let temp_dir = tempfile::tempdir().unwrap();
+    let db_path = temp_dir.path().join("faucet_test.redb");
+    let store = sprax_storage::RedbStore::open(&db_path).unwrap();
+
+    let mut genesis = GenesisConfig::default_development();
+    genesis.accounts[0].address = faucet_kp.address();
+    genesis.accounts[0].initial_balance = Amount::from_sprx_whole(1_000_000).unwrap();
+
+    let ledger = ChainLedger::init_from_genesis_with_store(genesis, store).unwrap();
+    let ledger_arc = std::sync::Arc::new(parking_lot::RwLock::new(ledger));
+
+    let faucet = std::sync::Arc::new(FaucetService::new(
+        faucet_kp,
+        ChainId::new("sprax-devnet-1").unwrap(),
+        3600,
+        100,
+    ));
+
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        listener.local_addr().unwrap().port()
+    };
+
+    sprax_faucet::FaucetServer::start(faucet.clone(), ledger_arc.clone(), port)
+        .await
+        .unwrap();
+
+    tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+
+    // 1. Check /health
+    let health_resp: serde_json::Value = ureq::get(&format!("http://127.0.0.1:{port}/health"))
+        .call()
+        .unwrap()
+        .into_json()
+        .unwrap();
+    assert_eq!(health_resp["status"], "healthy");
+
+    // 2. Check /stats
+    let stats_resp: serde_json::Value = ureq::get(&format!("http://127.0.0.1:{port}/stats"))
+        .call()
+        .unwrap()
+        .into_json()
+        .unwrap();
+    assert_eq!(stats_resp["network"], "sprax-devnet-1");
+
+    // 3. Post /claim
+    let claim_body = serde_json::json!({
+        "recipient": recipient_kp.address().to_string(),
+        "amount": 50
+    });
+    let claim_resp: serde_json::Value = ureq::post(&format!("http://127.0.0.1:{port}/claim"))
+        .send_json(claim_body.clone())
+        .unwrap()
+        .into_json()
+        .unwrap();
+    assert_eq!(claim_resp["success"], true);
+
+    // 4. Immediate second claim should get 429 Too Many Requests
+    let err = ureq::post(&format!("http://127.0.0.1:{port}/claim"))
+        .send_json(claim_body)
+        .unwrap_err();
+    match err {
+        ureq::Error::Status(code, _) => assert_eq!(code, 429),
+        other => panic!("Expected status 429, got: {other:?}"),
+    }
+}

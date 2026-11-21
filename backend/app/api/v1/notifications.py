@@ -1,14 +1,16 @@
+import uuid
+from decimal import Decimal
+
 from fastapi import APIRouter, Depends, Query
 from pydantic import BaseModel
+from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc, func
-from app.core.dependencies import get_db, get_current_user
-from app.db.models.notification import Notification, PriceAlert
-from app.core.response import ApiResponse, PaginatedResponse
-from app.core.feature_flags import is_enabled
+
+from app.core.dependencies import get_current_user, get_db
 from app.core.exceptions import SpraxError
-from decimal import Decimal
-import uuid
+from app.core.feature_flags import is_enabled
+from app.core.response import ApiResponse, PaginatedResponse
+from app.db.models.notification import Notification, PriceAlert
 
 router = APIRouter()
 

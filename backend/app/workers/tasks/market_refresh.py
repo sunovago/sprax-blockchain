@@ -1,8 +1,9 @@
 import asyncio
-from app.workers.celery_app import celery_app
-from app.modules.markets.service import get_market_service
-from app.db.redis import redis_delete
+
 from app.core.logging import logger
+from app.db.redis import redis_delete
+from app.modules.markets.service import get_market_service
+from app.workers.celery_app import celery_app
 
 
 @celery_app.task(name="app.workers.tasks.market_refresh.refresh_markets", bind=True, max_retries=3)

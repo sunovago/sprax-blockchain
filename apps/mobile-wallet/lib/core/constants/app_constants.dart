@@ -46,10 +46,19 @@ class AppConstants {
   );
 
   static const NetworkConfig devnet = NetworkConfig(
-    name: 'Local Devnet (Desktop/iOS)',
+    name: String.fromEnvironment(
+      'SPRAX_DEVNET_NAME',
+      defaultValue: 'Local Devnet (Desktop/iOS)',
+    ),
     chainId: 'sprax-devnet-1',
-    rpcUrl: 'http://127.0.0.1:26657',
-    explorerUrl: 'http://127.0.0.1:3000',
+    rpcUrl: String.fromEnvironment(
+      'SPRAX_DEVNET_RPC_URL',
+      defaultValue: 'http://127.0.0.1:26657',
+    ),
+    explorerUrl: String.fromEnvironment(
+      'SPRAX_DEVNET_EXPLORER_URL',
+      defaultValue: 'http://127.0.0.1:3000',
+    ),
     isTestnet: true,
   );
 
@@ -61,8 +70,17 @@ class AppConstants {
     isTestnet: true,
   );
 
+  static const NetworkConfig lanDevnet = NetworkConfig(
+    name: 'Local Devnet (Wi-Fi / LAN)',
+    chainId: 'sprax-devnet-1',
+    rpcUrl: 'http://10.111.250.173:26657',
+    explorerUrl: 'http://10.111.250.173:3000',
+    isTestnet: true,
+  );
+
   static const List<NetworkConfig> supportedNetworks = [
     devnet,
+    lanDevnet,
     androidEmulatorDevnet,
     testnet,
     mainnet,

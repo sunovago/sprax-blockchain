@@ -1,9 +1,10 @@
-from fastapi import APIRouter, HTTPException, Depends
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, desc
+
 from app.core.dependencies import get_db
-from app.db.models.validator import Validator, Delegation
 from app.core.response import ApiResponse
+from app.db.models.validator import Delegation, Validator
 
 router = APIRouter()
 

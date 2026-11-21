@@ -12,41 +12,7 @@ class NotificationService extends ChangeNotifier {
   }
 
   void _initDefaultNotifications() {
-    final now = DateTime.now();
-    _notifications.addAll([
-      AppNotification(
-        id: 'notif_1',
-        title: 'Price Alert: SPRX +9.65%',
-        message: 'SPRX broke above \$1.25 with surging 24h volume on Sprax Chain.',
-        type: NotificationType.priceAlert,
-        timestamp: now.subtract(const Duration(minutes: 15)),
-        isRead: false,
-      ),
-      AppNotification(
-        id: 'notif_2',
-        title: 'Testnet Perps Order Executed',
-        message: 'Long 2,000 SPRX at \$1.18 filled successfully in Demo Mode.',
-        type: NotificationType.orderFilled,
-        timestamp: now.subtract(const Duration(hours: 3)),
-        isRead: false,
-      ),
-      AppNotification(
-        id: 'notif_3',
-        title: 'Staking Epoch Reward Received',
-        message: 'You received +0.485 SPRX from Core Foundation Validator staking delegation.',
-        type: NotificationType.stakingReward,
-        timestamp: now.subtract(const Duration(hours: 18)),
-        isRead: true,
-      ),
-      AppNotification(
-        id: 'notif_4',
-        title: 'Network Upgrade: Sprax v1.2',
-        message: 'Sub-second BFT finality and lower gas parameters are now active.',
-        type: NotificationType.systemNotice,
-        timestamp: now.subtract(const Duration(days: 1)),
-        isRead: true,
-      ),
-    ]);
+    // Real notifications will be triggered by blockchain transactions and user activity
   }
 
   void addNotification({

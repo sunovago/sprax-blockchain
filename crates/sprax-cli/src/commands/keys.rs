@@ -95,10 +95,10 @@ pub(crate) fn execute(args: &KeysArgs) -> anyhow::Result<()> {
             println!("============================================================");
             println!("  Created New Key: '{name}'");
             println!("------------------------------------------------------------");
-            println!("  Address (Bech32) : {}", address);
+            println!("  Address (Bech32) : {address}");
             println!("  Address (Hex)    : {}", address.to_hex());
-            println!("  Algorithm        : {:?}", key_type);
-            println!("  Mnemonic Phrase  : {}", mnemonic);
+            println!("  Algorithm        : {key_type:?}");
+            println!("  Mnemonic Phrase  : {mnemonic}");
             println!("============================================================");
         }
         KeysSubcommands::List { home } => {
@@ -108,8 +108,7 @@ pub(crate) fn execute(args: &KeysArgs) -> anyhow::Result<()> {
 
             println!("============================================================");
             println!(
-                "  Local Keyring ({:?}) - Total Keys: {}",
-                keyring_dir,
+                "  Local Keyring ({keyring_dir:?}) - Total Keys: {}",
                 keys.len()
             );
             println!("------------------------------------------------------------");
@@ -122,12 +121,12 @@ pub(crate) fn execute(args: &KeysArgs) -> anyhow::Result<()> {
             let keyring_dir = home.join("keyring");
             let keyring = Keyring::open_or_create(&keyring_dir)?;
             if let Some(key) = keyring.get(name) {
-                println!("Key '{}':", name);
+                println!("Key '{name}':");
                 println!("  Address (Bech32) : {}", key.address);
                 println!("  Address (Hex)    : {}", key.address.to_hex());
                 println!("  Algorithm        : {:?}", key.key_type);
             } else {
-                println!("Key '{}' not found in keyring at {:?}", name, keyring_dir);
+                println!("Key '{name}' not found in keyring at {keyring_dir:?}");
             }
         }
         KeysSubcommands::Derive {
